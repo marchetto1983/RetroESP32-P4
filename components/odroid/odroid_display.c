@@ -195,6 +195,7 @@ static esp_err_t st7789_write_cmd_u8(uint8_t cmd, uint8_t value)
 static esp_err_t st7789_apply_known_init(void)
 {
     esp_err_t ret;
+
     /*
      * MADCTL
      *
@@ -207,6 +208,7 @@ static esp_err_t st7789_apply_known_init(void)
     if (ret != ESP_OK) {
         return ret;
     }
+
     /*
      * RGB565.
      */
@@ -217,6 +219,32 @@ static esp_err_t st7789_apply_known_init(void)
     if (ret != ESP_OK) {
         return ret;
     }
+
+    /*
+     * RAMCTRL
+     *
+     * Explicitly configure the ST7789 memory data order.
+     *
+     * 0xB0 = RAMCTRL
+     * 0x00, 0xE8 = RGB565 memory configuration.
+     */
+    {
+        const uint8_t ramctrl[] = {
+            0x00,
+            0xE8
+        };
+
+        ret = esp_lcd_panel_io_tx_param(
+            s_lcd_io,
+            0xB0,
+            ramctrl,
+            sizeof(ramctrl)
+        );
+        if (ret != ESP_OK) {
+            return ret;
+        }
+    }
+
     /*
      * Sleep Out.
      */
@@ -224,7 +252,9 @@ static esp_err_t st7789_apply_known_init(void)
     if (ret != ESP_OK) {
         return ret;
     }
+
     vTaskDelay(pdMS_TO_TICKS(120));
+
     /*
      * Display ON.
      */
@@ -232,7 +262,9 @@ static esp_err_t st7789_apply_known_init(void)
     if (ret != ESP_OK) {
         return ret;
     }
+
     vTaskDelay(pdMS_TO_TICKS(20));
+
     return ESP_OK;
 }
 

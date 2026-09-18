@@ -50,7 +50,7 @@
  * 0x11 = Sleep Out
  * 0x29 = Display ON
  */
-#define LCD_MADCTL_VALUE        0x68 //0x60
+#define LCD_MADCTL_VALUE        0x60
 #define LCD_PIXEL_FORMAT        0x05
 
 
