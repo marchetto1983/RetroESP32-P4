@@ -35,10 +35,8 @@
  * The public ILI9341-compatible API is deliberately preserved so
  * emulator code does not need to be modified.
  */
-
 #include "odroid_display.h"
 #include "pins_config.h"
-
 #ifdef CONFIG_HDMI_OUTPUT
 #include "ppa_engine.h"
 #include "hdmi_display.h"
@@ -48,51 +46,38 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
-
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_commands.h"
 #endif
-
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-
 static const char *TAG = "odroid_display";
-
 
 /* =========================================================================
  * DISPLAY GEOMETRY
  * =========================================================================
  */
-
 #ifdef CONFIG_HDMI_OUTPUT
-
 #define FB_W 640
 #define FB_H 480
-
 #else
-
 #define FB_W 320
 #define FB_H 240
-
 #endif
-
 #define FB_PIXELS   (FB_W * FB_H)
 #define FB_SIZE     (FB_PIXELS * sizeof(uint16_t))
-
 
 /* Emulator standard framebuffer. */
 #define EMU_W       320
@@ -100,91 +85,73 @@ static const char *TAG = "odroid_display";
 #define EMU_PIXELS  (EMU_W * EMU_H)
 #define EMU_SIZE    (EMU_PIXELS * sizeof(uint16_t))
 
-
 /* =========================================================================
  * GLOBAL FRAMEBUFFER
  * =========================================================================
  */
-
 static uint16_t *s_framebuffer = NULL;
 static bool s_fb_dirty = false;
-
 
 /* =========================================================================
  * DISPLAY MUTEX
  * =========================================================================
  */
-
 static SemaphoreHandle_t s_display_mutex = NULL;
-
 static void ensure_mutex(void)
 {
     if (!s_display_mutex) {
         s_display_mutex = xSemaphoreCreateMutex();
-
         if (!s_display_mutex) {
             ESP_LOGE(TAG, "Failed to create display mutex");
             abort();
         }
     }
 }
-
 void odroid_display_lock(void)
 {
     ensure_mutex();
     xSemaphoreTake(s_display_mutex, portMAX_DELAY);
 }
-
 void odroid_display_unlock(void)
 {
     if (s_display_mutex) {
         xSemaphoreGive(s_display_mutex);
     }
 }
-
 void odroid_display_lock_gb_display(void)
 {
     odroid_display_lock();
 }
-
 void odroid_display_unlock_gb_display(void)
 {
     odroid_display_unlock();
 }
-
 void odroid_display_lock_nes_display(void)
 {
     odroid_display_lock();
 }
-
 void odroid_display_unlock_nes_display(void)
 {
     odroid_display_unlock();
 }
-
 void odroid_display_lock_sms_display(void)
 {
     odroid_display_lock();
 }
-
 void odroid_display_unlock_sms_display(void)
 {
     odroid_display_unlock();
 }
 
-
 /* =========================================================================
  * ST7789V
  * =========================================================================
  */
-
 #ifndef CONFIG_HDMI_OUTPUT
-
 static esp_lcd_panel_io_handle_t s_lcd_io = NULL;
 static esp_lcd_panel_handle_t s_lcd_panel = NULL;
 static bool s_lcd_initialized = false;
 #endif
-
 /*
  * Your tested initialization:
  *
@@ -202,7 +169,6 @@ static esp_err_t st7789_write_cmd(uint8_t cmd)
     if (!s_lcd_io) {
         return ESP_ERR_INVALID_STATE;
     }
-
     return esp_lcd_panel_io_tx_param(
         s_lcd_io,
         cmd,
@@ -210,13 +176,11 @@ static esp_err_t st7789_write_cmd(uint8_t cmd)
         0
     );
 }
-
 static esp_err_t st7789_write_cmd_u8(uint8_t cmd, uint8_t value)
 {
     if (!s_lcd_io) {
         return ESP_ERR_INVALID_STATE;
     }
-
     return esp_lcd_panel_io_tx_param(
         s_lcd_io,
         cmd,
@@ -225,14 +189,12 @@ static esp_err_t st7789_write_cmd_u8(uint8_t cmd, uint8_t value)
     );
 }
 
-
 /*
  * Re-apply the known-good panel configuration.
  */
 static esp_err_t st7789_apply_known_init(void)
 {
     esp_err_t ret;
-
     /*
      * MADCTL
      *
@@ -242,11 +204,9 @@ static esp_err_t st7789_apply_known_init(void)
         LCD_CMD_MADCTL,
         LCD_MADCTL_VALUE
     );
-
     if (ret != ESP_OK) {
         return ret;
     }
-
     /*
      * RGB565.
      */
@@ -254,58 +214,45 @@ static esp_err_t st7789_apply_known_init(void)
         LCD_CMD_COLMOD,
         LCD_PIXEL_FORMAT
     );
-
     if (ret != ESP_OK) {
         return ret;
     }
-
     /*
      * Sleep Out.
      */
     ret = st7789_write_cmd(0x11);
-
     if (ret != ESP_OK) {
         return ret;
     }
-
     vTaskDelay(pdMS_TO_TICKS(120));
-
     /*
      * Display ON.
      */
     ret = st7789_write_cmd(0x29);
-
     if (ret != ESP_OK) {
         return ret;
     }
-
     vTaskDelay(pdMS_TO_TICKS(20));
-
     return ESP_OK;
 }
-
 
 /* =========================================================================
  * BACKLIGHT
  * =========================================================================
  */
-
 #define BL_GPIO       LCD_BK_LIGHT_GPIO
 #define BL_LEDC_CH    LEDC_CHANNEL_0
 #define BL_LEDC_TIMER LEDC_TIMER_0
 #define BL_DUTY_RES   LEDC_TIMER_13_BIT
 #define BL_DUTY_MAX   ((1 << 13) - 1)
-#define BL_FREQ_HZ    20000
-
+#define BL_FREQ_HZ    5000 //20000
 static bool s_backlight_init = false;
-
 
 static void backlight_init(void)
 {
     if (s_backlight_init) {
         return;
     }
-
     ledc_timer_config_t timer_cfg = {
         .speed_mode       = LEDC_LOW_SPEED_MODE,
         .duty_resolution  = BL_DUTY_RES,
@@ -313,9 +260,7 @@ static void backlight_init(void)
         .freq_hz          = BL_FREQ_HZ,
         .clk_cfg          = LEDC_AUTO_CLK,
     };
-
     esp_err_t ret = ledc_timer_config(&timer_cfg);
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -324,7 +269,6 @@ static void backlight_init(void)
         );
         return;
     }
-
     ledc_channel_config_t channel_cfg = {
         .gpio_num       = BL_GPIO,
         .speed_mode     = LEDC_LOW_SPEED_MODE,
@@ -335,9 +279,7 @@ static void backlight_init(void)
         .hpoint         = 0,
         .flags.output_invert = 0,
     };
-
     ret = ledc_channel_config(&channel_cfg);
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -346,9 +288,7 @@ static void backlight_init(void)
         );
         return;
     }
-
     s_backlight_init = true;
-
     ESP_LOGI(
         TAG,
         "ST7789 backlight initialized on GPIO%d",
@@ -356,46 +296,37 @@ static void backlight_init(void)
     );
 }
 
-
 static void backlight_set_percent(uint8_t percent)
 {
     if (!s_backlight_init) {
         return;
     }
-
     if (percent > 100) {
         percent = 100;
     }
-
     uint32_t duty =
         ((uint32_t)percent * BL_DUTY_MAX) / 100;
-
     ledc_set_duty(
         LEDC_LOW_SPEED_MODE,
         BL_LEDC_CH,
         duty
     );
-
     ledc_update_duty(
         LEDC_LOW_SPEED_MODE,
         BL_LEDC_CH
     );
 }
 
-
 /* =========================================================================
  * ST7789 INITIALIZATION
  * =========================================================================
  */
-
 static esp_err_t st7789_spi_init(void)
 {
     if (s_lcd_initialized) {
         return ESP_OK;
     }
-
     ESP_LOGI(TAG, "Initializing ST7789V SPI LCD");
-
     spi_bus_config_t bus_cfg = {
         .mosi_io_num     = LCD_SPI_MOSI,
         .miso_io_num     = LCD_SPI_MISO,
@@ -411,13 +342,11 @@ static esp_err_t st7789_spi_init(void)
         .isr_cpu_id      = ESP_INTR_CPU_AFFINITY_AUTO,
         .intr_flags      = 0,
     };
-
     esp_err_t ret = spi_bus_initialize(
         LCD_SPI_HOST,
         &bus_cfg,
         SPI_DMA_CH_AUTO
     );
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -426,7 +355,6 @@ static esp_err_t st7789_spi_init(void)
         );
         return ret;
     }
-
 
     /*
      * ST7789 SPI interface.
@@ -453,24 +381,20 @@ static esp_err_t st7789_spi_init(void)
             .cs_high_active = 0,
         },
     };
-
     ret = esp_lcd_new_panel_io_spi(
         (esp_lcd_spi_bus_handle_t)LCD_SPI_HOST,
         &io_cfg,
         &s_lcd_io
     );
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
             "esp_lcd_new_panel_io_spi failed: %s",
             esp_err_to_name(ret)
         );
-
         spi_bus_free(LCD_SPI_HOST);
         return ret;
     }
-
 
     /*
      * ESP-IDF ST7789 configuration.
@@ -491,31 +415,24 @@ static esp_err_t st7789_spi_init(void)
         },
         .vendor_config = NULL,
     };
-
     ret = esp_lcd_new_panel_st7789(
         s_lcd_io,
         &panel_cfg,
         &s_lcd_panel
     );
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
             "esp_lcd_new_panel_st7789 failed: %s",
             esp_err_to_name(ret)
         );
-
         esp_lcd_panel_io_del(s_lcd_io);
         s_lcd_io = NULL;
-
         spi_bus_free(LCD_SPI_HOST);
-
         return ret;
     }
 
-
     ret = esp_lcd_panel_reset(s_lcd_panel);
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -525,9 +442,7 @@ static esp_err_t st7789_spi_init(void)
         return ret;
     }
 
-
     ret = esp_lcd_panel_init(s_lcd_panel);
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -537,13 +452,11 @@ static esp_err_t st7789_spi_init(void)
         return ret;
     }
 
-
     /*
      * Override the generic ESP-IDF ST7789 initialization with the
      * exact initialization already verified on the physical display.
      */
     ret = st7789_apply_known_init();
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -553,25 +466,22 @@ static esp_err_t st7789_spi_init(void)
         return ret;
     }
 
-
     /*
      * No software rotation is used.
      *
      * The panel itself is already configured by MADCTL=0x60.
      */
-    ret = esp_lcd_panel_swap_xy(
+    /*eliminato tramite AI perché l'immagine risultava ruotata di 90 gradiret = esp_lcd_panel_swap_xy(
         s_lcd_panel,
         false
     );
-
     if (ret != ESP_OK) {
         ESP_LOGW(
             TAG,
             "swap_xy(false) returned %s",
             esp_err_to_name(ret)
         );
-    }
-
+    }*/
 
     /*
      * Do not call esp_lcd_panel_mirror() here.
@@ -580,12 +490,10 @@ static esp_err_t st7789_spi_init(void)
      * remain untouched.
      */
 
-
     /*
      * Display ON is already sent by our known-good initialization.
      */
     s_lcd_initialized = true;
-
     ESP_LOGI(
         TAG,
         "ST7789V ready: %dx%d RGB565 SPI @ %d Hz",
@@ -593,37 +501,29 @@ static esp_err_t st7789_spi_init(void)
         LCD_V_RES,
         LCD_SPI_FREQ_HZ
     );
-
     return ESP_OK;
 }
-
 
 /* =========================================================================
  * HDMI
  * =========================================================================
  */
-
 #ifdef CONFIG_HDMI_OUTPUT
-
 static hdmi_display_t s_hdmi_disp;
 static bool s_hdmi_initialized = false;
-
 #define HDMI_OUT_W   640
 #define HDMI_OUT_H   480
-
 
 static esp_err_t hdmi_init_if_needed(void)
 {
     if (s_hdmi_initialized) {
         return ESP_OK;
     }
-
     esp_err_t ret = hdmi_display_init(
         HDMI_MODE_640x480,
         &s_hdmi_disp,
         odroid_system_get_i2c_bus()
     );
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -632,48 +532,37 @@ static esp_err_t hdmi_init_if_needed(void)
         );
         return ret;
     }
-
     s_hdmi_initialized = true;
-
     ESP_LOGI(
         TAG,
         "HDMI initialized: %dx%d",
         s_hdmi_disp.h_res,
         s_hdmi_disp.v_res
     );
-
     return ESP_OK;
 }
-
 #endif
-
 
 /* =========================================================================
  * TIMING
  * =========================================================================
  */
-
 static int64_t s_timing_lcd_acc = 0;
 static int64_t s_timing_pal_acc = 0;
 static int s_timing_count = 0;
-
 #define TIMING_INTERVAL 60
-
 
 /* =========================================================================
  * EMULATOR BUFFER
  * =========================================================================
  */
-
 static uint16_t *s_emu_scaled = NULL;
-
 
 static uint16_t *alloc_emu_buffer(void)
 {
     if (s_emu_scaled) {
         return s_emu_scaled;
     }
-
     /*
      * Prefer internal SRAM because emulator rendering happens very often.
      */
@@ -683,7 +572,6 @@ static uint16_t *alloc_emu_buffer(void)
         EMU_SIZE,
         MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA
     );
-
     if (!s_emu_scaled) {
         s_emu_scaled = heap_caps_aligned_calloc(
             64,
@@ -692,7 +580,6 @@ static uint16_t *alloc_emu_buffer(void)
             MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA
         );
     }
-
     if (!s_emu_scaled) {
         ESP_LOGE(
             TAG,
@@ -700,36 +587,28 @@ static uint16_t *alloc_emu_buffer(void)
             EMU_SIZE
         );
     }
-
     return s_emu_scaled;
 }
-
 
 /* =========================================================================
  * DISPLAY FLUSH
  * =========================================================================
  */
-
 void display_flush(void)
 {
     if (!s_fb_dirty || !s_framebuffer) {
         return;
     }
-
     s_fb_dirty = false;
 
-
 #ifdef CONFIG_HDMI_OUTPUT
-
     if (!s_hdmi_initialized) {
         return;
     }
-
     /*
      * HDMI keeps the old PPA RGB565 -> RGB888 path.
      */
     int64_t t0 = esp_timer_get_time();
-
     esp_err_t ret = ppa_scale_rgb565_to_rgb888(
         s_framebuffer,
         FB_W,
@@ -742,9 +621,7 @@ void display_flush(void)
         NULL,
         false
     );
-
     int64_t t1 = esp_timer_get_time();
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -753,24 +630,18 @@ void display_flush(void)
         );
         return;
     }
-
     esp_cache_msync(
         s_hdmi_disp.fb,
         s_hdmi_disp.fb_size,
         ESP_CACHE_MSYNC_FLAG_DIR_C2M
     );
-
     int64_t t2 = esp_timer_get_time();
-
     s_timing_lcd_acc += t2 - t1;
     s_timing_count++;
-
 #else
-
     if (!s_lcd_initialized || !s_lcd_panel) {
         return;
     }
-
     /*
      * Direct 320x240 -> ST7789V.
      *
@@ -779,7 +650,6 @@ void display_flush(void)
      * No scaling.
      */
     int64_t t0 = esp_timer_get_time();
-
     esp_err_t ret = esp_lcd_panel_draw_bitmap(
         s_lcd_panel,
         0,
@@ -788,9 +658,7 @@ void display_flush(void)
         LCD_V_RES,
         s_framebuffer
     );
-
     int64_t t1 = esp_timer_get_time();
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -799,15 +667,11 @@ void display_flush(void)
         );
         return;
     }
-
     s_timing_lcd_acc += t1 - t0;
     s_timing_count++;
-
 #endif
 
-
     if (s_timing_count >= TIMING_INTERVAL) {
-
         printf(
             "DISP TIMING (%d frames): LCD=%.1fms PAL=%.1fms\n",
             s_timing_count,
@@ -816,20 +680,17 @@ void display_flush(void)
             s_timing_pal_acc /
                 (s_timing_count * 1000.0f)
         );
-
         s_timing_lcd_acc = 0;
         s_timing_pal_acc = 0;
         s_timing_count = 0;
     }
 }
 
-
 void display_flush_force(void)
 {
     s_fb_dirty = true;
     display_flush();
 }
-
 
 void display_set_scale(float sx, float sy)
 {
@@ -847,12 +708,10 @@ void display_set_scale(float sx, float sy)
     );
 }
 
-
 /* =========================================================================
  * EMULATOR 320x240 FLUSH
  * =========================================================================
  */
-
 static void display_emu_flush_320x240(
     const uint16_t *buf,
     bool byte_swap)
@@ -861,13 +720,10 @@ static void display_emu_flush_320x240(
         return;
     }
 
-
 #ifdef CONFIG_HDMI_OUTPUT
-
     if (!s_hdmi_initialized) {
         return;
     }
-
     esp_err_t ret = ppa_scale_rgb565_to_rgb888(
         buf,
         EMU_W,
@@ -880,7 +736,6 @@ static void display_emu_flush_320x240(
         NULL,
         byte_swap
     );
-
     if (ret != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -889,15 +744,12 @@ static void display_emu_flush_320x240(
         );
         return;
     }
-
     esp_cache_msync(
         s_hdmi_disp.fb,
         s_hdmi_disp.fb_size,
         ESP_CACHE_MSYNC_FLAG_DIR_C2M
     );
-
 #else
-
     /*
      * The physical display is exactly 320x240.
      *
@@ -907,9 +759,7 @@ static void display_emu_flush_320x240(
         return;
     }
 
-
     if (!byte_swap) {
-
         esp_err_t ret = esp_lcd_panel_draw_bitmap(
             s_lcd_panel,
             0,
@@ -918,7 +768,6 @@ static void display_emu_flush_320x240(
             EMU_H,
             buf
         );
-
         if (ret != ESP_OK) {
             ESP_LOGE(
                 TAG,
@@ -926,20 +775,16 @@ static void display_emu_flush_320x240(
                 esp_err_to_name(ret)
             );
         }
-
     } else {
-
         /*
          * Some emulator paths provide RGB565 with the opposite byte
          * ordering. Use the common emulator buffer as a conversion
          * buffer instead of modifying the caller's framebuffer.
          */
         uint16_t *tmp = alloc_emu_buffer();
-
         if (!tmp) {
             return;
         }
-
         for (int i = 0; i < EMU_PIXELS; ++i) {
             uint16_t p = buf[i];
             tmp[i] = (uint16_t)(
@@ -947,7 +792,6 @@ static void display_emu_flush_320x240(
                 (p << 8)
             );
         }
-
         esp_err_t ret = esp_lcd_panel_draw_bitmap(
             s_lcd_panel,
             0,
@@ -956,7 +800,6 @@ static void display_emu_flush_320x240(
             EMU_H,
             tmp
         );
-
         if (ret != ESP_OK) {
             ESP_LOGE(
                 TAG,
@@ -965,22 +808,18 @@ static void display_emu_flush_320x240(
             );
         }
     }
-
 #endif
 }
-
 
 /* =========================================================================
  * ILI9341 COMPATIBILITY API
  * =========================================================================
  */
-
 void ili9341_init(void)
 {
     if (s_framebuffer) {
         return;
     }
-
 
     /*
      * The new physical LCD is native 320x240.
@@ -993,9 +832,7 @@ void ili9341_init(void)
         FB_SIZE,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA
     );
-
     if (!s_framebuffer) {
-
         /*
          * Fall back to internal DMA-capable memory if PSRAM allocation
          * fails.
@@ -1008,7 +845,6 @@ void ili9341_init(void)
         );
     }
 
-
     if (!s_framebuffer) {
         ESP_LOGE(
             TAG,
@@ -1018,13 +854,11 @@ void ili9341_init(void)
         return;
     }
 
-
     memset(
         s_framebuffer,
         0,
         FB_SIZE
     );
-
 
     ESP_LOGI(
         TAG,
@@ -1034,15 +868,11 @@ void ili9341_init(void)
         FB_SIZE
     );
 
-
 #ifdef CONFIG_HDMI_OUTPUT
-
     if (hdmi_init_if_needed() != ESP_OK) {
         return;
     }
-
 #else
-
     if (st7789_spi_init() != ESP_OK) {
         ESP_LOGE(
             TAG,
@@ -1050,25 +880,19 @@ void ili9341_init(void)
         );
         return;
     }
-
     backlight_init();
-
     /*
      * Full brightness on startup.
      */
     backlight_set_percent(100);
-
 #endif
 
-
     s_fb_dirty = true;
-
     /*
      * Clear physical display immediately.
      */
     display_flush_force();
 }
-
 
 void ili9341_write_frame_rectangleLE(
     int x,
@@ -1081,54 +905,44 @@ void ili9341_write_frame_rectangleLE(
         return;
     }
 
-
     /*
      * Clip the rectangle.
      */
     int src_x = 0;
     int src_y = 0;
-
     if (x < 0) {
         src_x = -x;
         w += x;
         x = 0;
     }
-
     if (y < 0) {
         src_y = -y;
         h += y;
         y = 0;
     }
-
     if (x + w > FB_W) {
         w = FB_W - x;
     }
-
     if (y + h > FB_H) {
         h = FB_H - y;
     }
-
     if (w <= 0 || h <= 0) {
         return;
     }
-
 
     /*
      * Copy row-by-row.
      */
     for (int row = 0; row < h; ++row) {
-
         const uint16_t *src =
             data +
             (src_y + row) *
                 (w + src_x) +
             src_x;
-
         uint16_t *dst =
             s_framebuffer +
             (y + row) * FB_W +
             x;
-
         memcpy(
             dst,
             src,
@@ -1136,24 +950,19 @@ void ili9341_write_frame_rectangleLE(
         );
     }
 
-
     s_fb_dirty = true;
 }
-
 
 void ili9341_clear(uint16_t color)
 {
     if (!s_framebuffer) {
         return;
     }
-
     for (int i = 0; i < FB_PIXELS; ++i) {
         s_framebuffer[i] = color;
     }
-
     s_fb_dirty = true;
 }
-
 
 bool is_backlight_initialized(void)
 {
@@ -1164,18 +973,15 @@ bool is_backlight_initialized(void)
 #endif
 }
 
-
 uint16_t *display_get_framebuffer(void)
 {
     return s_framebuffer;
 }
 
-
 uint16_t *display_get_emu_buffer(void)
 {
     return alloc_emu_buffer();
 }
-
 
 void display_emu_flush(void)
 {
@@ -1187,12 +993,10 @@ void display_emu_flush(void)
     }
 }
 
-
 /* =========================================================================
  * RAW LCD DRAW
  * =========================================================================
  */
-
 void display_lcd_draw_raw(
     uint16_t x,
     uint16_t y,
@@ -1204,12 +1008,9 @@ void display_lcd_draw_raw(
         return;
     }
 
-
     odroid_display_lock();
 
-
 #ifdef CONFIG_HDMI_OUTPUT
-
     /*
      * No direct portrait/raw LCD operation for HDMI.
      */
@@ -1218,11 +1019,8 @@ void display_lcd_draw_raw(
     (void)w;
     (void)h;
     (void)data;
-
 #else
-
     if (s_lcd_initialized && s_lcd_panel) {
-
         /*
          * Clip to 320x240.
          */
@@ -1230,21 +1028,17 @@ void display_lcd_draw_raw(
         uint16_t draw_y = y;
         uint16_t draw_w = w;
         uint16_t draw_h = h;
-
         if (draw_x >= LCD_H_RES ||
             draw_y >= LCD_V_RES) {
             odroid_display_unlock();
             return;
         }
-
         if (draw_x + draw_w > LCD_H_RES) {
             draw_w = LCD_H_RES - draw_x;
         }
-
         if (draw_y + draw_h > LCD_V_RES) {
             draw_h = LCD_V_RES - draw_y;
         }
-
 
         esp_err_t ret = esp_lcd_panel_draw_bitmap(
             s_lcd_panel,
@@ -1254,7 +1048,6 @@ void display_lcd_draw_raw(
             draw_y + draw_h,
             data
         );
-
         if (ret != ESP_OK) {
             ESP_LOGE(
                 TAG,
@@ -1263,39 +1056,31 @@ void display_lcd_draw_raw(
             );
         }
     }
-
 #endif
-
 
     odroid_display_unlock();
 }
-
 
 /* =========================================================================
  * GAME BOY
  * =========================================================================
  */
-
 #define GAMEBOY_WIDTH   160
 #define GAMEBOY_HEIGHT  144
 #define GB_PIXELS       (GAMEBOY_WIDTH * GAMEBOY_HEIGHT)
-
 static uint16_t *s_gb_temp = NULL;
-
 
 static bool ensure_gb_temp(void)
 {
     if (s_gb_temp) {
         return true;
     }
-
     s_gb_temp = heap_caps_aligned_calloc(
         64,
         1,
         GB_PIXELS * sizeof(uint16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA
     );
-
     if (!s_gb_temp) {
         ESP_LOGE(
             TAG,
@@ -1303,19 +1088,15 @@ static bool ensure_gb_temp(void)
         );
         return false;
     }
-
     return true;
 }
-
 
 void ili9341_write_frame_gb(
     uint16_t *buffer,
     int scale)
 {
     (void)scale;
-
     odroid_display_lock_gb_display();
-
 
     if (!buffer) {
         ili9341_clear(0x0000);
@@ -1324,27 +1105,22 @@ void ili9341_write_frame_gb(
         return;
     }
 
-
     if (!ensure_gb_temp()) {
         odroid_display_unlock_gb_display();
         return;
     }
 
-
     uint16_t *emu = alloc_emu_buffer();
-
     if (!emu) {
         odroid_display_unlock_gb_display();
         return;
     }
-
 
     memcpy(
         s_gb_temp,
         buffer,
         GB_PIXELS * sizeof(uint16_t)
     );
-
 
     /*
      * 160x144 -> 320x240.
@@ -1353,67 +1129,53 @@ void ili9341_write_frame_gb(
      * This avoids the old 320x240 -> 480x640 rotation pipeline.
      */
     for (int y = 0; y < EMU_H; ++y) {
-
         int sy =
             y * GAMEBOY_HEIGHT /
             EMU_H;
-
         const uint16_t *src =
             &s_gb_temp[
                 sy * GAMEBOY_WIDTH
             ];
-
         uint16_t *dst =
             &emu[
                 y * EMU_W
             ];
-
         for (int x = 0; x < EMU_W; ++x) {
-
             int sx =
                 x * GAMEBOY_WIDTH /
                 EMU_W;
-
             dst[x] = src[sx];
         }
     }
-
 
     display_emu_flush_320x240(
         emu,
         false
     );
 
-
     odroid_display_unlock_gb_display();
 }
-
 
 /* =========================================================================
  * NES
  * =========================================================================
  */
-
 #define NES_GAME_WIDTH   256
 #define NES_GAME_HEIGHT  224
 #define NES_PIXELS       (NES_GAME_WIDTH * NES_GAME_HEIGHT)
-
 static uint16_t *s_nes_temp = NULL;
-
 
 static bool ensure_nes_temp(void)
 {
     if (s_nes_temp) {
         return true;
     }
-
     s_nes_temp = heap_caps_aligned_calloc(
         64,
         1,
         NES_PIXELS * sizeof(uint16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA
     );
-
     if (!s_nes_temp) {
         ESP_LOGE(
             TAG,
@@ -1421,10 +1183,8 @@ static bool ensure_nes_temp(void)
         );
         return false;
     }
-
     return true;
 }
-
 
 void ili9341_write_frame_nes(
     uint8_t *buffer,
@@ -1432,9 +1192,7 @@ void ili9341_write_frame_nes(
     uint8_t scale)
 {
     (void)scale;
-
     odroid_display_lock_nes_display();
-
 
     if (!buffer) {
         ili9341_clear(0x0000);
@@ -1443,21 +1201,17 @@ void ili9341_write_frame_nes(
         return;
     }
 
-
     if (!myPalette ||
         !ensure_nes_temp()) {
         odroid_display_unlock_nes_display();
         return;
     }
 
-
     uint16_t *emu = alloc_emu_buffer();
-
     if (!emu) {
         odroid_display_unlock_nes_display();
         return;
     }
-
 
     /*
      * Palette conversion.
@@ -1466,12 +1220,10 @@ void ili9341_write_frame_nes(
      * for the old hardware path. Preserve that behavior.
      */
     for (int i = 0; i < NES_PIXELS; ++i) {
-
         uint16_t pixel =
             myPalette[
                 buffer[i]
             ];
-
         s_nes_temp[i] =
             (uint16_t)(
                 (pixel >> 8) |
@@ -1479,75 +1231,60 @@ void ili9341_write_frame_nes(
             );
     }
 
-
     /*
      * 256x224 -> 320x240.
      */
     for (int y = 0; y < EMU_H; ++y) {
-
         int sy =
             y * NES_GAME_HEIGHT /
             EMU_H;
-
         const uint16_t *src =
             &s_nes_temp[
                 sy * NES_GAME_WIDTH
             ];
-
         uint16_t *dst =
             &emu[
                 y * EMU_W
             ];
-
         for (int x = 0; x < EMU_W; ++x) {
-
             int sx =
                 x * NES_GAME_WIDTH /
                 EMU_W;
-
             dst[x] = src[sx];
         }
     }
-
 
     display_emu_flush_320x240(
         emu,
         false
     );
 
-
     odroid_display_unlock_nes_display();
 }
-
 
 /* =========================================================================
  * SMS / GAME GEAR
  * =========================================================================
  */
-
 #define SMS_WIDTH        256
 #define SMS_HEIGHT       192
 #define GAMEGEAR_WIDTH   160
 #define GAMEGEAR_HEIGHT  144
 #define PIXEL_MASK       0x1F
 #define SMS_MAX_PIXELS   (SMS_WIDTH * SMS_HEIGHT)
-
 static uint16_t *s_sms_temp = NULL;
-
 
 static bool ensure_sms_temp(void)
 {
     if (s_sms_temp) {
         return true;
     }
-
     s_sms_temp = heap_caps_aligned_calloc(
         64,
         1,
         SMS_MAX_PIXELS * sizeof(uint16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA
     );
-
     if (!s_sms_temp) {
         ESP_LOGE(
             TAG,
@@ -1555,10 +1292,8 @@ static bool ensure_sms_temp(void)
         );
         return false;
     }
-
     return true;
 }
-
 
 void ili9341_write_frame_sms(
     uint8_t *buffer,
@@ -1567,9 +1302,7 @@ void ili9341_write_frame_sms(
     uint8_t scale)
 {
     (void)scale;
-
     odroid_display_lock_sms_display();
-
 
     if (!buffer) {
         ili9341_clear(0x0000);
@@ -1578,32 +1311,26 @@ void ili9341_write_frame_sms(
         return;
     }
 
-
     if (!color ||
         !ensure_sms_temp()) {
         odroid_display_unlock_sms_display();
         return;
     }
 
-
     uint16_t *emu = alloc_emu_buffer();
-
     if (!emu) {
         odroid_display_unlock_sms_display();
         return;
     }
 
-
     const int src_w =
         isGameGear ?
         GAMEGEAR_WIDTH :
         SMS_WIDTH;
-
     const int src_h =
         isGameGear ?
         GAMEGEAR_HEIGHT :
         SMS_HEIGHT;
-
     /*
      * Game Gear data is contained in a 256-wide source buffer
      * with a 48-pixel horizontal offset.
@@ -1612,28 +1339,22 @@ void ili9341_write_frame_sms(
         isGameGear ?
         256 :
         SMS_WIDTH;
-
     const int src_x_off =
         isGameGear ?
         48 :
         0;
 
-
     for (int y = 0; y < src_h; ++y) {
-
         const uint8_t *src_row =
             &buffer[
                 y * src_stride +
                 src_x_off
             ];
-
         uint16_t *dst_row =
             &s_sms_temp[
                 y * src_w
             ];
-
         for (int x = 0; x < src_w; ++x) {
-
             dst_row[x] =
                 color[
                     src_row[x] &
@@ -1642,61 +1363,48 @@ void ili9341_write_frame_sms(
         }
     }
 
-
     /*
      * Scale to the physical 320x240 panel.
      */
     for (int y = 0; y < EMU_H; ++y) {
-
         int sy =
             y * src_h /
             EMU_H;
-
         const uint16_t *src =
             &s_sms_temp[
                 sy * src_w
             ];
-
         uint16_t *dst =
             &emu[
                 y * EMU_W
             ];
-
         for (int x = 0; x < EMU_W; ++x) {
-
             int sx =
                 x * src_w /
                 EMU_W;
-
             dst[x] = src[sx];
         }
     }
-
 
     display_emu_flush_320x240(
         emu,
         false
     );
 
-
     odroid_display_unlock_sms_display();
 }
-
 
 /* =========================================================================
  * C64
  * =========================================================================
  */
-
 void ili9341_write_frame_c64(
     uint8_t *buffer,
     uint16_t *palette)
 {
     const int C64_DISPLAY_X = 384;
     const int C64_DISPLAY_Y = 272;
-
     odroid_display_lock();
-
 
     if (!buffer || !palette) {
         ili9341_clear(0x0000);
@@ -1705,14 +1413,11 @@ void ili9341_write_frame_c64(
         return;
     }
 
-
     uint16_t *emu = alloc_emu_buffer();
-
     if (!emu) {
         odroid_display_unlock();
         return;
     }
-
 
     /*
      * Center crop:
@@ -1721,23 +1426,17 @@ void ili9341_write_frame_c64(
      */
     const int offX =
         (C64_DISPLAY_X - EMU_W) / 2;
-
     const int offY =
         (C64_DISPLAY_Y - EMU_H) / 2;
 
-
     for (int y = 0; y < EMU_H; ++y) {
-
         int src_base =
             (y + offY) *
             C64_DISPLAY_X +
             offX;
-
         int dst_base =
             y * EMU_W;
-
         for (int x = 0; x < EMU_W; ++x) {
-
             emu[
                 dst_base + x
             ] =
@@ -1749,28 +1448,23 @@ void ili9341_write_frame_c64(
         }
     }
 
-
     display_emu_flush_320x240(
         emu,
         false
     );
 
-
     odroid_display_unlock();
 }
-
 
 /* =========================================================================
  * ATARI 7800 / PROSYSTEM
  * =========================================================================
  */
-
 void ili9341_write_frame_prosystem(
     uint8_t *buffer,
     uint16_t *palette)
 {
     odroid_display_lock();
-
 
     if (!buffer || !palette) {
         ili9341_clear(0x0000);
@@ -1779,18 +1473,14 @@ void ili9341_write_frame_prosystem(
         return;
     }
 
-
     uint16_t *emu = alloc_emu_buffer();
-
     if (!emu) {
         odroid_display_unlock();
         return;
     }
 
-
     int64_t tp0 =
         esp_timer_get_time();
-
 
     /*
      * 320x240 indexed -> RGB565.
@@ -1799,93 +1489,75 @@ void ili9341_write_frame_prosystem(
      */
     const uint32_t *in32 =
         (const uint32_t *)buffer;
-
     uint32_t *out32 =
         (uint32_t *)emu;
-
 
     for (int i = 0;
          i < EMU_PIXELS / 4;
          ++i) {
-
         uint32_t pix4 =
             in32[i];
-
         uint16_t p0 =
             palette[
                 (pix4 >> 0) &
                 0xFF
             ];
-
         uint16_t p1 =
             palette[
                 (pix4 >> 8) &
                 0xFF
             ];
-
         uint16_t p2 =
             palette[
                 (pix4 >> 16) &
                 0xFF
             ];
-
         uint16_t p3 =
             palette[
                 (pix4 >> 24) &
                 0xFF
             ];
 
-
         out32[i * 2] =
             p0 |
             ((uint32_t)p1 << 16);
-
         out32[i * 2 + 1] =
             p2 |
             ((uint32_t)p3 << 16);
     }
 
-
     s_timing_pal_acc +=
         esp_timer_get_time() -
         tp0;
-
 
     display_emu_flush_320x240(
         emu,
         false
     );
 
-
     odroid_display_unlock();
 }
-
 
 /* =========================================================================
  * ATARI LYNX
  * =========================================================================
  */
-
 #define LYNX_GAME_WIDTH   160
 #define LYNX_GAME_HEIGHT  102
 #define LYNX_PIXELS       (LYNX_GAME_WIDTH * LYNX_GAME_HEIGHT)
-
 static uint16_t *s_lynx_temp = NULL;
-
 
 static bool ensure_lynx_temp(void)
 {
     if (s_lynx_temp) {
         return true;
     }
-
     s_lynx_temp = heap_caps_aligned_calloc(
         64,
         1,
         LYNX_PIXELS * sizeof(uint16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA
     );
-
     if (!s_lynx_temp) {
         ESP_LOGE(
             TAG,
@@ -1893,16 +1565,13 @@ static bool ensure_lynx_temp(void)
         );
         return false;
     }
-
     return true;
 }
-
 
 void ili9341_write_frame_lynx(
     const uint16_t *buffer)
 {
     odroid_display_lock();
-
 
     if (!buffer) {
         ili9341_clear(0x0000);
@@ -1911,12 +1580,10 @@ void ili9341_write_frame_lynx(
         return;
     }
 
-
     if (!ensure_lynx_temp()) {
         odroid_display_unlock();
         return;
     }
-
 
     memcpy(
         s_lynx_temp,
@@ -1924,14 +1591,11 @@ void ili9341_write_frame_lynx(
         LYNX_PIXELS * sizeof(uint16_t)
     );
 
-
 #ifdef CONFIG_HDMI_OUTPUT
-
     /*
      * HDMI keeps its original PPA scaling path.
      */
     if (s_hdmi_initialized) {
-
         esp_err_t ret =
             ppa_scale_rgb565_to_rgb888(
                 s_lynx_temp,
@@ -1947,7 +1611,6 @@ void ili9341_write_frame_lynx(
                 NULL,
                 false
             );
-
         if (ret != ESP_OK) {
             ESP_LOGE(
                 TAG,
@@ -1962,17 +1625,13 @@ void ili9341_write_frame_lynx(
             );
         }
     }
-
 #else
-
     uint16_t *emu =
         alloc_emu_buffer();
-
     if (!emu) {
         odroid_display_unlock();
         return;
     }
-
 
     /*
      * 160x102 -> 320x240.
@@ -1981,55 +1640,43 @@ void ili9341_write_frame_lynx(
      * through the old 800x480 path.
      */
     for (int y = 0; y < EMU_H; ++y) {
-
         int sy =
             y * LYNX_GAME_HEIGHT /
             EMU_H;
-
         const uint16_t *src =
             &s_lynx_temp[
                 sy * LYNX_GAME_WIDTH
             ];
-
         uint16_t *dst =
             &emu[
                 y * EMU_W
             ];
-
         for (int x = 0; x < EMU_W; ++x) {
-
             int sx =
                 x * LYNX_GAME_WIDTH /
                 EMU_W;
-
             dst[x] = src[sx];
         }
     }
-
 
     display_emu_flush_320x240(
         emu,
         false
     );
-
 #endif
-
 
     odroid_display_unlock();
 }
-
 
 /* =========================================================================
  * GENERIC RGB565 FRAME
  * =========================================================================
  */
-
 void ili9341_write_frame_rgb565_ex(
     const uint16_t *buffer,
     bool byte_swap_input)
 {
     odroid_display_lock();
-
 
     if (!buffer) {
         ili9341_clear(0x0000);
@@ -2037,7 +1684,6 @@ void ili9341_write_frame_rgb565_ex(
         odroid_display_unlock();
         return;
     }
-
 
     /*
      * Input is already 320x240.
@@ -2047,10 +1693,8 @@ void ili9341_write_frame_rgb565_ex(
         byte_swap_input
     );
 
-
     odroid_display_unlock();
 }
-
 
 void ili9341_write_frame_rgb565(
     const uint16_t *buffer)
@@ -2067,12 +1711,10 @@ void ili9341_write_frame_rgb565(
     );
 }
 
-
 /* =========================================================================
  * CUSTOM RGB565 FRAME
  * =========================================================================
  */
-
 void ili9341_write_frame_rgb565_custom(
     const uint16_t *buffer,
     uint16_t in_w,
@@ -2082,7 +1724,6 @@ void ili9341_write_frame_rgb565_custom(
 {
     odroid_display_lock();
 
-
     if (!buffer) {
         ili9341_clear(0x0000);
         display_flush();
@@ -2090,13 +1731,11 @@ void ili9341_write_frame_rgb565_custom(
         return;
     }
 
-
     if (in_w == 0 ||
         in_h == 0) {
         odroid_display_unlock();
         return;
     }
-
 
     /*
      * The old implementation used:
@@ -2113,12 +1752,10 @@ void ili9341_write_frame_rgb565_custom(
      */
     uint16_t *emu =
         alloc_emu_buffer();
-
     if (!emu) {
         odroid_display_unlock();
         return;
     }
-
 
     /*
      * If the requested scale is zero or negative, use 1x.
@@ -2127,16 +1764,13 @@ void ili9341_write_frame_rgb565_custom(
         scale = 1.0f;
     }
 
-
     /*
      * Compute the scaled dimensions.
      */
     int scaled_w =
         (int)((float)in_w * scale);
-
     int scaled_h =
         (int)((float)in_h * scale);
-
 
     if (scaled_w <= 0 ||
         scaled_h <= 0) {
@@ -2144,53 +1778,41 @@ void ili9341_write_frame_rgb565_custom(
         return;
     }
 
-
     /*
      * Fit into 320x240 while preserving aspect ratio.
      */
     float fit =
         1.0f;
-
     if (scaled_w > EMU_W) {
         fit =
             (float)EMU_W /
             (float)scaled_w;
     }
-
     if (scaled_h > EMU_H) {
-
         float fy =
             (float)EMU_H /
             (float)scaled_h;
-
         if (fy < fit) {
             fit = fy;
         }
     }
 
-
     int final_w =
         (int)((float)scaled_w * fit);
-
     int final_h =
         (int)((float)scaled_h * fit);
-
 
     if (final_w <= 0) {
         final_w = 1;
     }
-
     if (final_h <= 0) {
         final_h = 1;
     }
 
-
     int x_off =
         (EMU_W - final_w) / 2;
-
     int y_off =
         (EMU_H - final_h) / 2;
-
 
     /*
      * Clear borders.
@@ -2201,7 +1823,6 @@ void ili9341_write_frame_rgb565_custom(
         EMU_SIZE
     );
 
-
     /*
      * Nearest-neighbour scaling.
      *
@@ -2211,35 +1832,28 @@ void ili9341_write_frame_rgb565_custom(
     for (int y = 0;
          y < final_h;
          ++y) {
-
         int sy =
             (y * in_h) /
             final_h;
-
         if (sy >= in_h) {
             sy = in_h - 1;
         }
 
-
         for (int x = 0;
              x < final_w;
              ++x) {
-
             int sx =
                 (x * in_w) /
                 final_w;
-
             if (sx >= in_w) {
                 sx = in_w - 1;
             }
-
 
             uint16_t pixel =
                 buffer[
                     sy * in_w +
                     sx
                 ];
-
 
             if (byte_swap_input) {
                 pixel =
@@ -2249,7 +1863,6 @@ void ili9341_write_frame_rgb565_custom(
                     );
             }
 
-
             emu[
                 (y + y_off) * EMU_W +
                 (x + x_off)
@@ -2257,47 +1870,36 @@ void ili9341_write_frame_rgb565_custom(
         }
     }
 
-
     display_emu_flush_320x240(
         emu,
         false
     );
 
-
     odroid_display_unlock();
 }
-
 
 /* =========================================================================
  * POWER / PREPARE
  * =========================================================================
  */
-
 void ili9341_poweroff(void)
 {
 #ifdef CONFIG_HDMI_OUTPUT
-
     return;
-
 #else
-
     if (s_backlight_init) {
-
         ledc_set_duty(
             LEDC_LOW_SPEED_MODE,
             BL_LEDC_CH,
             0
         );
-
         ledc_update_duty(
             LEDC_LOW_SPEED_MODE,
             BL_LEDC_CH
         );
     }
-
 #endif
 }
-
 
 void ili9341_prepare(void)
 {
@@ -2308,12 +1910,10 @@ void ili9341_prepare(void)
      */
 }
 
-
 /* =========================================================================
  * STATUS SCREENS
  * =========================================================================
  */
-
 void odroid_display_show_sderr(int errNum)
 {
     ESP_LOGE(
@@ -2321,14 +1921,12 @@ void odroid_display_show_sderr(int errNum)
         "SD card error: %d",
         errNum
     );
-
     /*
      * Red screen.
      */
     ili9341_clear(0xF800);
     display_flush();
 }
-
 
 void odroid_display_show_hourglass(void)
 {
@@ -2338,7 +1936,6 @@ void odroid_display_show_hourglass(void)
     );
 }
 
-
 void odroid_display_show_splash(void)
 {
     ESP_LOGI(
@@ -2346,7 +1943,6 @@ void odroid_display_show_splash(void)
         "Splash screen shown"
     );
 }
-
 
 void odroid_display_drain_spi(void)
 {
