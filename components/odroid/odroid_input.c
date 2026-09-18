@@ -62,6 +62,30 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+/*
+ * WT9932P4-TINY GPIO gamepad
+ *
+ * Buttons are connected between GPIO and GND.
+ * Internal pull-up is enabled.
+ *
+ * HIGH = released
+ * LOW  = pressed
+ */
+#define GAMEPAD_GPIO_LEFT    GPIO_NUM_4
+#define GAMEPAD_GPIO_RIGHT   GPIO_NUM_2
+#define GAMEPAD_GPIO_UP      GPIO_NUM_5
+#define GAMEPAD_GPIO_DOWN    GPIO_NUM_3
+
+#define GAMEPAD_GPIO_START   GPIO_NUM_46
+#define GAMEPAD_GPIO_SELECT  GPIO_NUM_45
+
+#define GAMEPAD_GPIO_A       GPIO_NUM_26
+#define GAMEPAD_GPIO_B       GPIO_NUM_27
+#define GAMEPAD_GPIO_X       GPIO_NUM_13
+#define GAMEPAD_GPIO_Y       GPIO_NUM_12
+
+#define GAMEPAD_GPIO_L       GPIO_NUM_11
+#define GAMEPAD_GPIO_R       GPIO_NUM_14
 
 static const char *TAG = "odroid_input";
 
@@ -168,7 +192,7 @@ static bool s_gpio_pad_detected = false;
  */
 bool odroid_input_gpio_pad_detected(void)
 {
-    return false;
+    return s_gpio_pad_detected;
 }
 
 
@@ -232,39 +256,80 @@ void odroid_input_gamepad_init(void)
         return;
     }
 
-
     /*
-     * IMPORTANT:
+     * WT9932P4-TINY physical GPIO gamepad.
      *
-     * Do NOT initialize GPIO49/50/52 here.
+     * Buttons are active-low:
      *
-     * GPIO49 and GPIO50 belong to I2S on the WT9932P4-TINY.
+     *   HIGH = released
+     *   LOW  = pressed
+     *
+     * All buttons use the internal pull-up.
      */
+    const uint64_t gamepad_mask =
+        (1ULL << GAMEPAD_GPIO_LEFT)  |
+        (1ULL << GAMEPAD_GPIO_RIGHT) |
+        (1ULL << GAMEPAD_GPIO_UP)    |
+        (1ULL << GAMEPAD_GPIO_DOWN)  |
+        (1ULL << GAMEPAD_GPIO_START) |
+        (1ULL << GAMEPAD_GPIO_SELECT)|
+        (1ULL << GAMEPAD_GPIO_A)     |
+        (1ULL << GAMEPAD_GPIO_B)     |
+        (1ULL << GAMEPAD_GPIO_X)     |
+        (1ULL << GAMEPAD_GPIO_Y)     |
+        (1ULL << GAMEPAD_GPIO_L)     |
+        (1ULL << GAMEPAD_GPIO_R);
 
+    gpio_config_t io_conf = {
+        .pin_bit_mask = gamepad_mask,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
 
-    /*
-     * USB gamepad is initialized by odroid_system_init().
-     */
+    esp_err_t err = gpio_config(&io_conf);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "GPIO gamepad initialization failed: %s",
+            esp_err_to_name(err)
+        );
+
+        return;
+    }
+
+    s_gpio_pad_detected = true;
     s_initialized = true;
 
-
-#ifdef CONFIG_HDMI_OUTPUT
+    ESP_LOGI(
+        TAG,
+        "Input subsystem ready (WT9932P4-TINY GPIO gamepad)"
+    );
 
     ESP_LOGI(
         TAG,
-        "Input subsystem ready (USB HID gamepad, HDMI mode)"
+        "D-Pad: LEFT=%d RIGHT=%d UP=%d DOWN=%d",
+        GAMEPAD_GPIO_LEFT,
+        GAMEPAD_GPIO_RIGHT,
+        GAMEPAD_GPIO_UP,
+        GAMEPAD_GPIO_DOWN
     );
-
-#else
 
     ESP_LOGI(
         TAG,
-        "Input subsystem ready (USB HID gamepad)"
+        "Buttons: A=%d B=%d X=%d Y=%d L=%d R=%d START=%d SELECT=%d",
+        GAMEPAD_GPIO_A,
+        GAMEPAD_GPIO_B,
+        GAMEPAD_GPIO_X,
+        GAMEPAD_GPIO_Y,
+        GAMEPAD_GPIO_L,
+        GAMEPAD_GPIO_R,
+        GAMEPAD_GPIO_START,
+        GAMEPAD_GPIO_SELECT
     );
-
-#endif
 }
-
 
 /* =========================================================================
  * GAMEPAD READ
@@ -278,323 +343,133 @@ void odroid_input_gamepad_read(
         return;
     }
 
-
+    /*
+     * Clear all inputs first.
+     *
+     * odroid_gamepad_state uses:
+     *   0 = released
+     *   1 = pressed
+     */
     memset(
         state,
         0,
         sizeof(odroid_gamepad_state)
     );
 
+    /*
+     * WT9932P4-TINY physical GPIO buttons.
+     *
+     * All buttons are active-low:
+     *
+     *   GPIO HIGH = released
+     *   GPIO LOW  = pressed
+     *
+     * gpio_get_level() returns 0 when the button is pressed.
+     */
 
-    gamepad_state_t gp;
+    /* D-PAD */
 
-    memset(
-        &gp,
-        0,
-        sizeof(gp)
-    );
+    state->values[
+        ODROID_INPUT_UP
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_UP) == 0);
 
+    state->values[
+        ODROID_INPUT_DOWN
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_DOWN) == 0);
 
-    gamepad_get_state(&gp);
+    state->values[
+        ODROID_INPUT_LEFT
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_LEFT) == 0);
 
-
-    if (gp.connected) {
-
-        /*
-         * Auto-load mapping for this controller when:
-         *
-         *   - first connected
-         *   - VID changes
-         *   - PID changes
-         */
-        uint16_t vid = 0;
-        uint16_t pid = 0;
-
-        gamepad_get_vid_pid(
-            &vid,
-            &pid
-        );
-
-
-        if (!s_usb_map_loaded ||
-            vid != s_usb_map_vid ||
-            pid != s_usb_map_pid) {
-
-            odroid_input_usb_map_load();
-        }
+    state->values[
+        ODROID_INPUT_RIGHT
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_RIGHT) == 0);
 
 
-        /* -------------------------------------------------------------
-         * D-PAD
-         * -------------------------------------------------------------
-         */
+    /* FACE BUTTONS */
 
-        state->values[
-            ODROID_INPUT_UP
-        ] =
-            (gp.dpad & GAMEPAD_DPAD_UP)
-            ? 1
-            : 0;
+    state->values[
+        ODROID_INPUT_A
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_A) == 0);
 
+    state->values[
+        ODROID_INPUT_B
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_B) == 0);
 
-        state->values[
-            ODROID_INPUT_DOWN
-        ] =
-            (gp.dpad & GAMEPAD_DPAD_DOWN)
-            ? 1
-            : 0;
+    state->values[
+        ODROID_INPUT_X
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_X) == 0);
 
-
-        state->values[
-            ODROID_INPUT_LEFT
-        ] =
-            (gp.dpad & GAMEPAD_DPAD_LEFT)
-            ? 1
-            : 0;
+    state->values[
+        ODROID_INPUT_Y
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_Y) == 0);
 
 
-        state->values[
-            ODROID_INPUT_RIGHT
-        ] =
-            (gp.dpad & GAMEPAD_DPAD_RIGHT)
-            ? 1
-            : 0;
+    /* SHOULDERS */
+
+    state->values[
+        ODROID_INPUT_L
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_L) == 0);
+
+    state->values[
+        ODROID_INPUT_R
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_R) == 0);
 
 
-        /* -------------------------------------------------------------
-         * LEFT ANALOG STICK → D-PAD
-         * -------------------------------------------------------------
-         *
-         * Axis range is expected to be approximately -128..127.
-         */
-        if (gp.axis_ly < -64) {
+    /* SYSTEM BUTTONS */
 
-            state->values[
-                ODROID_INPUT_UP
-            ] = 1;
+    state->values[
+        ODROID_INPUT_SELECT
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_SELECT) == 0);
 
-        } else if (gp.axis_ly > 64) {
-
-            state->values[
-                ODROID_INPUT_DOWN
-            ] = 1;
-        }
-
-
-        if (gp.axis_lx < -64) {
-
-            state->values[
-                ODROID_INPUT_LEFT
-            ] = 1;
-
-        } else if (gp.axis_lx > 64) {
-
-            state->values[
-                ODROID_INPUT_RIGHT
-            ] = 1;
-        }
-
-
-        /* -------------------------------------------------------------
-         * OPTIONAL D-PAD BUTTON MAPPING
-         * -------------------------------------------------------------
-         *
-         * Some USB controllers report their D-pad as ordinary buttons.
-         */
-        if (s_usb_map.btn[8] &&
-            (gp.buttons & s_usb_map.btn[8])) {
-
-            state->values[
-                ODROID_INPUT_UP
-            ] = 1;
-        }
-
-
-        if (s_usb_map.btn[9] &&
-            (gp.buttons & s_usb_map.btn[9])) {
-
-            state->values[
-                ODROID_INPUT_DOWN
-            ] = 1;
-        }
-
-
-        if (s_usb_map.btn[10] &&
-            (gp.buttons & s_usb_map.btn[10])) {
-
-            state->values[
-                ODROID_INPUT_LEFT
-            ] = 1;
-        }
-
-
-        if (s_usb_map.btn[11] &&
-            (gp.buttons & s_usb_map.btn[11])) {
-
-            state->values[
-                ODROID_INPUT_RIGHT
-            ] = 1;
-        }
-
-
-        /* -------------------------------------------------------------
-         * FACE BUTTONS
-         * ------------------------------------------------------------- */
-
-        state->values[
-            ODROID_INPUT_A
-        ] =
-            (gp.buttons & s_usb_map.btn[0])
-            ? 1
-            : 0;
-
-
-        state->values[
-            ODROID_INPUT_B
-        ] =
-            (gp.buttons & s_usb_map.btn[1])
-            ? 1
-            : 0;
-
-
-        state->values[
-            ODROID_INPUT_X
-        ] =
-            (gp.buttons & s_usb_map.btn[2])
-            ? 1
-            : 0;
-
-
-        state->values[
-            ODROID_INPUT_Y
-        ] =
-            (gp.buttons & s_usb_map.btn[3])
-            ? 1
-            : 0;
-
-
-        /* -------------------------------------------------------------
-         * SHOULDERS
-         * ------------------------------------------------------------- */
-
-        state->values[
-            ODROID_INPUT_L
-        ] =
-            (gp.buttons & s_usb_map.btn[4])
-            ? 1
-            : 0;
-
-
-        state->values[
-            ODROID_INPUT_R
-        ] =
-            (gp.buttons & s_usb_map.btn[5])
-            ? 1
-            : 0;
-
-
-        /* -------------------------------------------------------------
-         * SYSTEM BUTTONS
-         * ------------------------------------------------------------- */
-
-        state->values[
-            ODROID_INPUT_SELECT
-        ] =
-            (gp.buttons & s_usb_map.btn[6])
-            ? 1
-            : 0;
-
-
-        state->values[
-            ODROID_INPUT_START
-        ] =
-            (gp.buttons & s_usb_map.btn[7])
-            ? 1
-            : 0;
+    state->values[
+        ODROID_INPUT_START
+    ] =
+        (gpio_get_level(GAMEPAD_GPIO_START) == 0);
 
 
 #ifndef CONFIG_HDMI_OUTPUT
 
-        /*
-         * Paddle ADC.
-         *
-         * Only read here when explicitly initialized.
-         */
-        if (s_paddle_adc_handle) {
+    /*
+     * Paddle ADC.
+     *
+     * Keep the existing ADC functionality unchanged.
+     */
+    if (s_paddle_adc_handle) {
 
-            int raw = 0;
+        int raw = 0;
 
-            if (adc_oneshot_read(
-                    s_paddle_adc_handle,
-                    PADDLE_ADC_CHANNEL,
-                    &raw
-                ) == ESP_OK) {
+        if (adc_oneshot_read(
+                s_paddle_adc_handle,
+                PADDLE_ADC_CHANNEL,
+                &raw
+            ) == ESP_OK) {
 
-                odroid_paddle_adc_raw = raw;
-            }
+            odroid_paddle_adc_raw = raw;
         }
-
-#endif
     }
 
-
-#ifdef CONFIG_HDMI_OUTPUT
+#endif
 
     /*
-     * HDMI mode:
+     * X / Y system shortcuts.
      *
-     * L2 → MENU
-     * R2 → VOLUME
+     * X -> MENU
+     * Y -> VOLUME
      *
-     * This behavior from the original implementation is preserved.
-     */
-    {
-        gamepad_state_t gp_hdmi;
-
-        memset(
-            &gp_hdmi,
-            0,
-            sizeof(gp_hdmi)
-        );
-
-        gamepad_get_state(&gp_hdmi);
-
-
-        if (gp_hdmi.connected) {
-
-            if (gp_hdmi.buttons &
-                GAMEPAD_BTN_L2) {
-
-                state->values[
-                    ODROID_INPUT_MENU
-                ] = 1;
-            }
-
-
-            if (gp_hdmi.buttons &
-                GAMEPAD_BTN_R2) {
-
-                state->values[
-                    ODROID_INPUT_VOLUME
-                ] = 1;
-            }
-        }
-    }
-
-#endif
-
-
-    /* -------------------------------------------------------------
-     * X / Y SYSTEM SHORTCUTS
-     * -------------------------------------------------------------
-     *
-     * Preserved from the original project:
-     *
-     * X → MENU
-     * Y → VOLUME
-     *
-     * This is disabled for emulators that use X/Y natively by setting
-     * odroid_input_xy_menu_disable.
+     * Emulators that use X/Y natively can disable this
+     * through odroid_input_xy_menu_disable.
      */
     if (!odroid_input_xy_menu_disable) {
 
@@ -605,7 +480,6 @@ void odroid_input_gamepad_read(
                 ODROID_INPUT_X
             ];
 
-
         state->values[
             ODROID_INPUT_VOLUME
         ] |=
@@ -614,7 +488,6 @@ void odroid_input_gamepad_read(
             ];
     }
 }
-
 
 /* =========================================================================
  * RAW INPUT
