@@ -73,6 +73,17 @@ static audio_config_t s_config;
 static bool s_initialized = false;
 
 static int s_volume = 60;
+/*
+ * Software volume buffer.
+ *
+ * This must NOT be allocated on the stack of audio_play_pcm(),
+ * because audio_play_pcm() is called from the NeoGeo audio task,
+ * whose stack is intentionally small.
+ */
+static int16_t *s_volume_buffer = NULL;
+
+static const size_t s_volume_buffer_samples =
+    AUDIO_WRITE_CHUNK / sizeof(int16_t);
 
 
 /* =========================================================================
@@ -453,6 +464,27 @@ esp_err_t audio_init(
 
     s_volume =
         s_config.volume;
+	/*
+	 * Allocate the software-volume buffer in internal RAM.
+	 *
+	 * audio_play_pcm() runs in the NeoGeo audio task, so this buffer
+	 * must never live on that task's stack.
+	 */
+	s_volume_buffer =
+		(int16_t *)heap_caps_malloc(
+			AUDIO_WRITE_CHUNK,
+			MALLOC_CAP_INTERNAL |
+			MALLOC_CAP_8BIT
+		);
+
+	if (!s_volume_buffer) {
+		ESP_LOGE(
+			TAG,
+			"Failed to allocate software volume buffer"
+		);
+
+		return ESP_ERR_NO_MEM;
+	}
 
 
     /*
@@ -980,7 +1012,6 @@ esp_err_t audio_play_pcm(
         sample_rate !=
         s_config.sample_rate
     ) {
-
         esp_err_t ret =
             audio_set_sample_rate(
                 sample_rate
@@ -1007,7 +1038,6 @@ esp_err_t audio_play_pcm(
 
 
         while (remaining > 0) {
-
             size_t to_write =
                 remaining >
                 AUDIO_WRITE_CHUNK
@@ -1030,7 +1060,6 @@ esp_err_t audio_play_pcm(
 
 
             if (ret != ESP_OK) {
-
                 ESP_LOGE(
                     TAG,
                     "PCM write failed: %s",
@@ -1050,7 +1079,6 @@ esp_err_t audio_play_pcm(
             ptr +=
                 bytes_written;
 
-
             remaining -=
                 bytes_written;
         }
@@ -1059,6 +1087,135 @@ esp_err_t audio_play_pcm(
         return ESP_OK;
     }
 
+
+    /*
+     * Software volume processing.
+     *
+     * The volume buffer is allocated in internal heap memory
+     * during audio_init(). It must NOT be allocated on the
+     * stack because this function is called by the NeoGeo
+     * audio task.
+     *
+     * Input:
+     *
+     *   signed 16-bit stereo PCM
+     *
+     *   L R L R L R ...
+     */
+    const int16_t *input =
+        (const int16_t *)data;
+
+
+    size_t sample_count =
+        len /
+        sizeof(int16_t);
+
+
+    if (!s_volume_buffer) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+
+    const size_t buffer_samples =
+        s_volume_buffer_samples;
+
+
+    size_t processed =
+        0;
+
+
+    while (
+        processed <
+        sample_count
+    ) {
+
+        size_t count =
+            sample_count -
+            processed;
+
+
+        if (
+            count >
+            buffer_samples
+        ) {
+            count =
+                buffer_samples;
+        }
+
+
+        for (size_t i = 0;
+             i < count;
+             ++i) {
+
+            int32_t sample =
+                input[
+                    processed + i
+                ];
+
+
+            sample =
+                (
+                    sample *
+                    s_volume
+                ) /
+                100;
+
+
+            if (sample > 32767) {
+                sample = 32767;
+            }
+
+
+            if (sample < -32768) {
+                sample = -32768;
+            }
+
+
+            s_volume_buffer[i] =
+                (int16_t)sample;
+        }
+
+
+        size_t bytes_written =
+            0;
+
+
+        esp_err_t ret =
+            i2s_channel_write(
+                s_tx_handle,
+                s_volume_buffer,
+                count *
+                sizeof(int16_t),
+                &bytes_written,
+                portMAX_DELAY
+            );
+
+
+        if (ret != ESP_OK) {
+            ESP_LOGE(
+                TAG,
+                "PCM volume write failed: %s",
+                esp_err_to_name(ret)
+            );
+
+
+            return ret;
+        }
+
+
+        if (bytes_written == 0) {
+            return ESP_FAIL;
+        }
+
+
+        processed +=
+            bytes_written /
+            sizeof(int16_t);
+    }
+
+
+    return ESP_OK;
+}
 
     /*
      * Software volume processing.
@@ -1077,16 +1234,9 @@ esp_err_t audio_play_pcm(
         len /
         sizeof(int16_t);
 
-
-    int16_t volume_buffer[
-        AUDIO_WRITE_CHUNK /
-        sizeof(int16_t)
-    ];
-
-
-    const size_t buffer_samples =
-        sizeof(volume_buffer) /
-        sizeof(volume_buffer[0]);
+	if (!s_volume_buffer) {
+    return ESP_ERR_INVALID_STATE;
+	}
 
 
     size_t processed =
@@ -1141,8 +1291,8 @@ esp_err_t audio_play_pcm(
             }
 
 
-            volume_buffer[i] =
-                (int16_t)sample;
+            s_volume_buffer[i] =
+				(int16_t)sample;
         }
 
 
@@ -1150,15 +1300,14 @@ esp_err_t audio_play_pcm(
             0;
 
 
-        esp_err_t ret =
-            i2s_channel_write(
-                s_tx_handle,
-                volume_buffer,
-                count *
-                sizeof(int16_t),
-                &bytes_written,
-                portMAX_DELAY
-            );
+        i2s_channel_write(
+			s_tx_handle,
+			s_volume_buffer,
+			count *
+			sizeof(int16_t),
+			&bytes_written,
+			portMAX_DELAY
+		);
 
 
         if (ret != ESP_OK) {
