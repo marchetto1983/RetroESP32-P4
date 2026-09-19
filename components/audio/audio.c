@@ -150,10 +150,7 @@ static esp_err_t i2s_driver_init(const audio_config_t *cfg)
             (i2s_port_t)cfg->i2s_num,
             I2S_ROLE_MASTER
         );
-
-    chan_cfg.auto_clear =
-        true;
-
+    chan_cfg.auto_clear = true;
     esp_err_t ret =
         i2s_new_channel(
             &chan_cfg,
@@ -161,15 +158,9 @@ static esp_err_t i2s_driver_init(const audio_config_t *cfg)
             NULL
         );
 
-    if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "i2s_new_channel failed: %s",
-            esp_err_to_name(ret)
-        );
+    if (ret != ESP_OK) {ESP_LOGE(TAG, "i2s_new_channel failed: %s", esp_err_to_name(ret));
         return ret;
     }
-
     /*
      * Standard Philips I2S.
      *
@@ -189,16 +180,11 @@ static esp_err_t i2s_driver_init(const audio_config_t *cfg)
                 AUDIO_SLOT_MODE
             ),
         .gpio_cfg = {
-            .mclk =
-                (gpio_num_t)cfg->mclk_io,
-            .bclk =
-                (gpio_num_t)cfg->bclk_io,
-            .ws =
-                (gpio_num_t)cfg->ws_io,
-            .dout =
-                (gpio_num_t)cfg->dout_io,
-            .din =
-                (gpio_num_t)cfg->din_io,
+            .mclk = (gpio_num_t)cfg->mclk_io,
+            .bclk = (gpio_num_t)cfg->bclk_io,
+            .ws =   (gpio_num_t)cfg->ws_io,
+            .dout = (gpio_num_t)cfg->dout_io,
+            .din =  (gpio_num_t)cfg->din_io,
             .invert_flags = {
                 .mclk_inv = false,
                 .bclk_inv = false,
@@ -213,96 +199,30 @@ static esp_err_t i2s_driver_init(const audio_config_t *cfg)
      * No MCLK is physically routed because cfg->mclk_io is
      * GPIO_NUM_NC.
      */
-    std_cfg.clk_cfg.mclk_multiple =
-        AUDIO_MCLK_MULTIPLE;
-
+    std_cfg.clk_cfg.mclk_multiple = AUDIO_MCLK_MULTIPLE;
     ret =
         i2s_channel_init_std_mode(
             s_tx_handle,
             &std_cfg
         );
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "I2S TX initialization failed: %s",
-            esp_err_to_name(ret)
-        );
-
-        i2s_del_channel(
-            s_tx_handle
-        );
-
-        s_tx_handle =
-            NULL;
-
+    if (ret != ESP_OK) {ESP_LOGE(TAG, "I2S TX initialization failed: %s", esp_err_to_name(ret));
+        i2s_del_channel(s_tx_handle);
+        s_tx_handle = NULL;
         return ret;
     }
-
-    ret =
-        i2s_channel_enable(
-            s_tx_handle
-        );
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "I2S TX enable failed: %s",
-            esp_err_to_name(ret)
-        );
-
-        i2s_del_channel(
-            s_tx_handle
-        );
-
-        s_tx_handle =
-            NULL;
-
+    ret = i2s_channel_enable(s_tx_handle);
+    if (ret != ESP_OK) {ESP_LOGE(TAG, "I2S TX enable failed: %s", esp_err_to_name(ret));
+        i2s_del_channel(s_tx_handle);
+        s_tx_handle = NULL;
         return ret;
     }
-
-    ESP_LOGI(
-        TAG,
-        "I2S%d initialized",
-        cfg->i2s_num
-    );
-
-    ESP_LOGI(
-        TAG,
-        "Sample rate : %d Hz",
-        cfg->sample_rate
-    );
-
-    ESP_LOGI(
-        TAG,
-        "BCLK        : GPIO%d",
-        cfg->bclk_io
-    );
-
-    ESP_LOGI(
-        TAG,
-        "WS          : GPIO%d",
-        cfg->ws_io
-    );
-
-    ESP_LOGI(
-        TAG,
-        "DOUT        : GPIO%d",
-        cfg->dout_io
-    );
-
-    ESP_LOGI(
-        TAG,
-        "MCLK        : GPIO%d",
-        cfg->mclk_io
-    );
-
-    ESP_LOGI(
-        TAG,
-        "DIN         : GPIO%d",
-        cfg->din_io
-    );
-
+    ESP_LOGI(TAG, "I2S%d initialized", cfg->i2s_num);
+    ESP_LOGI(TAG, "Sample rate : %d Hz", cfg->sample_rate);
+    ESP_LOGI(TAG, "BCLK        : GPIO%d", cfg->bclk_io);
+    ESP_LOGI(TAG, "WS          : GPIO%d", cfg->ws_io);
+    ESP_LOGI(TAG, "DOUT        : GPIO%d", cfg->dout_io);
+    ESP_LOGI(TAG, "MCLK        : GPIO%d", cfg->mclk_io);
+    ESP_LOGI(TAG, "DIN         : GPIO%d", cfg->din_io);
     return ESP_OK;
 }
 
@@ -310,71 +230,42 @@ static esp_err_t i2s_driver_init(const audio_config_t *cfg)
  * PUBLIC INITIALIZATION
  * =========================================================================
  */
-esp_err_t audio_init(
-    const audio_config_t *config)
+esp_err_t audio_init(const audio_config_t *config)
 {
     if (s_initialized) {
-        ESP_LOGW(
-            TAG,
-            "Audio already initialized"
-        );
+        ESP_LOGW(TAG, "Audio already initialized");
         return ESP_OK;
     }
-
     if (!config) {
-        ESP_LOGE(
-            TAG,
-            "Invalid audio configuration"
-        );
+        ESP_LOGE(TAG, "Invalid audio configuration");
         return ESP_ERR_INVALID_ARG;
     }
-
-    s_config =
-        *config;
-
+    s_config = *config;
     if (s_config.sample_rate <= 0) {
-        s_config.sample_rate =
-            16000;
+        s_config.sample_rate = 16000;
     }
-
     if (s_config.volume < 0) {
         s_config.volume = 0;
     }
-
     if (s_config.volume > 100) {
         s_config.volume = 100;
     }
-
-    s_volume =
-        s_config.volume;
+    s_volume = s_config.volume;
 	/*
 	 * Allocate the software-volume buffer in internal RAM.
 	 *
 	 * audio_play_pcm() runs in the NeoGeo audio task, so this buffer
 	 * must never live on that task's stack.
 	 */
-	s_volume_buffer =
-		(int16_t *)heap_caps_malloc(
-			AUDIO_WRITE_CHUNK,
-			MALLOC_CAP_INTERNAL |
-			MALLOC_CAP_8BIT
-		);
+	s_volume_buffer = (int16_t *)heap_caps_malloc(AUDIO_WRITE_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 	if (!s_volume_buffer) {
-		ESP_LOGE(
-			TAG,
-			"Failed to allocate software volume buffer"
-		);
+		ESP_LOGE(TAG, "Failed to allocate software volume buffer");
 		return ESP_ERR_NO_MEM;
 	}
-
     /*
      * Configure amplifier GPIO first, but keep amplifier disabled.
      */
-    esp_err_t ret =
-        amplifier_init(
-            &s_config
-        );
-
+    esp_err_t ret = amplifier_init(&s_config);
     if (ret != ESP_OK) {
         return ret;
     }
