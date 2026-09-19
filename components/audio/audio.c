@@ -762,71 +762,31 @@ esp_err_t audio_play_pcm(
      *
      *   L R L R L R ...
      */
-    const int16_t *input =
-        (const int16_t *)data;
-
-    size_t sample_count =
-        len /
-        sizeof(int16_t);
-
+    const int16_t *input = (const int16_t *)data;
+    size_t sample_count = len / sizeof(int16_t);
     if (!s_volume_buffer) {
         return ESP_ERR_INVALID_STATE;
     }
-
-    const size_t buffer_samples =
-        s_volume_buffer_samples;
-
-    size_t processed =
-        0;
-
-    while (
-        processed <
-        sample_count
-    ) {
-        size_t count =
-            sample_count -
-            processed;
-
-        if (
-            count >
-            buffer_samples
-        ) {
-            count =
-                buffer_samples;
+    const size_t buffer_samples = s_volume_buffer_samples;
+    size_t processed = 0;
+    while (processed < sample_count) {
+        size_t count = sample_count - processed;
+        if (count > buffer_samples) {
+            count = buffer_samples;
         }
-
-        for (size_t i = 0;
-             i < count;
-             ++i) {
-            int32_t sample =
-                input[
-                    processed + i
-                ];
-
-            sample =
-                (
-                    sample *
-                    s_volume
-                ) /
-                100;
-
+        for (size_t i = 0; i < count; ++i) {
+            int32_t sample = input[processed + i];
+            sample = (sample * s_volume) / 100;
             if (sample > 32767) {
                 sample = 32767;
             }
-
             if (sample < -32768) {
                 sample = -32768;
             }
-
-            s_volume_buffer[i] =
-                (int16_t)sample;
+            s_volume_buffer[i] = (int16_t)sample;
         }
-
-        size_t bytes_written =
-            0;
-
-        esp_err_t ret =
-            i2s_channel_write(
+        size_t bytes_written = 0;
+        esp_err_t ret = i2s_channel_write(
                 s_tx_handle,
                 s_volume_buffer,
                 count *
@@ -834,25 +794,14 @@ esp_err_t audio_play_pcm(
                 &bytes_written,
                 portMAX_DELAY
             );
-
         if (ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
-                "PCM volume write failed: %s",
-                esp_err_to_name(ret)
-            );
-
+            ESP_LOGE(TAG, "PCM volume write failed: %s", esp_err_to_name(ret));
             return ret;
         }
-
         if (bytes_written == 0) {
             return ESP_FAIL;
         }
-
-        processed +=
-            bytes_written /
-            sizeof(int16_t);
+        processed += bytes_written / sizeof(int16_t);
     }
-
     return ESP_OK;
 }
