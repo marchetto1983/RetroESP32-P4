@@ -401,7 +401,7 @@ static esp_err_t st7789_spi_init(void)
         .lcd_cmd_bits      = 8,
         .lcd_param_bits    = 8,
         .spi_mode          = 0,
-        .trans_queue_depth = 8,
+        .trans_queue_depth = 1,//8,
         .on_color_trans_done = NULL,
         .user_ctx           = NULL,
         .flags = {
