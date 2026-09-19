@@ -103,67 +103,40 @@ static esp_err_t amplifier_init(
             GPIO_INTR_DISABLE,
     };
 
-    esp_err_t ret =
-        gpio_config(
+    esp_err_t ret = gpio_config(
             &gpio_cfg
         );
 
-    if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to configure amplifier GPIO%d: %s",
-            cfg->pa_ctrl_io,
-            esp_err_to_name(ret)
-        );
+    if (ret != ESP_OK) {ESP_LOGE(TAG, "Failed to configure amplifier GPIO%d: %s", cfg->pa_ctrl_io, esp_err_to_name(ret));
         return ret;
     }
 
     /*
      * Amplifier disabled while I2S is being initialized.
      */
-    gpio_set_level(
-        (gpio_num_t)cfg->pa_ctrl_io,
-        0
-    );
-
-    ESP_LOGI(
-        TAG,
-        "Amplifier control: GPIO%d",
-        cfg->pa_ctrl_io
-    );
-
+    gpio_set_level((gpio_num_t)cfg->pa_ctrl_io, 0);
+    ESP_LOGI(TAG, "Amplifier control: GPIO%d", cfg->pa_ctrl_io);
     return ESP_OK;
 }
 
-static void amplifier_enable(
-    const audio_config_t *cfg,
-    bool enable)
+static void amplifier_enable(const audio_config_t *cfg, bool enable)
 {
     if (!cfg) {
         return;
     }
-
     if (cfg->pa_ctrl_io < 0) {
         return;
     }
-
-    gpio_set_level(
-        (gpio_num_t)cfg->pa_ctrl_io,
-        enable ? 1 : 0
-    );
+    gpio_set_level((gpio_num_t)cfg->pa_ctrl_io, enable ? 1 : 0);
 }
 
 /* =========================================================================
  * I2S DRIVER INITIALIZATION
  * =========================================================================
  */
-static esp_err_t i2s_driver_init(
-    const audio_config_t *cfg)
+static esp_err_t i2s_driver_init(const audio_config_t *cfg)
 {
-    if (!cfg) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
+    if (!cfg) {return ESP_ERR_INVALID_ARG;}
     /*
      * TX ONLY.
      *
