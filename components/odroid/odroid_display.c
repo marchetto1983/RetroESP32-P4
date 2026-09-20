@@ -736,7 +736,6 @@ void display_flush(void)
         return;
     }
     s_fb_dirty = false;
-
 #ifdef CONFIG_HDMI_OUTPUT
     if (!s_hdmi_initialized) {
         return;
@@ -888,100 +887,6 @@ static void display_emu_flush_320x240(const uint16_t *buf, bool byte_swap)
     }
 #endif
 }
-
-/*static void display_emu_flush_320x240(
-    const uint16_t *buf,
-    bool byte_swap)
-{
-    if (!buf) {
-        return;
-    }
-
-#ifdef CONFIG_HDMI_OUTPUT
-    if (!s_hdmi_initialized) {
-        return;
-    }
-    esp_err_t ret = ppa_scale_rgb565_to_rgb888(
-        buf,
-        EMU_W,
-        EMU_H,
-        (float)HDMI_OUT_W / EMU_W,
-        (float)HDMI_OUT_H / EMU_H,
-        s_hdmi_disp.fb,
-        s_hdmi_disp.fb_size,
-        NULL,
-        NULL,
-        byte_swap
-    );
-    if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "HDMI emulator flush failed: 0x%x",
-            ret
-        );
-        return;
-    }
-    esp_cache_msync(
-        s_hdmi_disp.fb,
-        s_hdmi_disp.fb_size,
-        ESP_CACHE_MSYNC_FLAG_DIR_C2M
-    );
-#else
-    /*
-     * The physical display is exactly 320x240.
-     *
-     * Therefore the emulator framebuffer is sent directly.
-     */
-    if (!s_lcd_initialized || !s_lcd_panel) {
-        return;
-    }
-
-    if (!byte_swap) {
-        esp_err_t ret = if (!lcd_submit_frame(buf, byte_swap)) {
-			return;
-		}
-        if (ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
-                "ST7789 emulator flush failed: %s",
-                esp_err_to_name(ret)
-            );
-        }
-    } else {
-        /*
-         * Some emulator paths provide RGB565 with the opposite byte
-         * ordering. Use the common emulator buffer as a conversion
-         * buffer instead of modifying the caller's framebuffer.
-         */
-        uint16_t *tmp = alloc_emu_buffer();
-        if (!tmp) {
-            return;
-        }
-        for (int i = 0; i < EMU_PIXELS; ++i) {
-            uint16_t p = buf[i];
-            tmp[i] = (uint16_t)(
-                (p >> 8) |
-                (p << 8)
-            );
-        }
-        esp_err_t ret = esp_lcd_panel_draw_bitmap(
-            s_lcd_panel,
-            0,
-            0,
-            EMU_W,
-            EMU_H,
-            tmp
-        );
-        if (ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
-                "ST7789 byte-swapped flush failed: %s",
-                esp_err_to_name(ret)
-            );
-        }
-    }
-#endif
-}*/
 
 /* =========================================================================
  * ILI9341 COMPATIBILITY API
