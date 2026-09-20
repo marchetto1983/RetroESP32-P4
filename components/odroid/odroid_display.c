@@ -93,6 +93,102 @@ static uint16_t *s_framebuffer = NULL;
 static bool s_fb_dirty = false;
 
 /* =========================================================================
+ * LCD DMA DOUBLE BUFFERING
+ * =========================================================================
+ *
+ * The framebuffer owned by the emulator must never be modified while
+ * SPI DMA is still transmitting it.
+ *
+ * At 80 MHz a full 320x240 RGB565 frame takes roughly 15.4 ms on the wire.
+ * Two independent DMA buffers allow the emulator to prepare the next frame
+ * while the previous one is still being transmitted.
+ */
+#ifndef CONFIG_HDMI_OUTPUT
+#define LCD_DMA_FB_COUNT 2
+
+static uint16_t *s_lcd_dma_fb[LCD_DMA_FB_COUNT] = { NULL, NULL };
+static uint8_t s_lcd_dma_index = 0;
+static SemaphoreHandle_t s_lcd_dma_slots = NULL;
+
+static bool st7789_color_trans_done(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
+{
+    (void)panel_io;
+    (void)edata;
+    (void)user_ctx;
+    BaseType_t high_task_woken = pdFALSE;
+    if (s_lcd_dma_slots) {
+        xSemaphoreGiveFromISR(s_lcd_dma_slots, &high_task_woken);
+    }
+    return high_task_woken == pdTRUE;
+}
+
+static bool alloc_lcd_dma_buffers(void)
+{
+    for (int i = 0; i < LCD_DMA_FB_COUNT; ++i) {
+        s_lcd_dma_fb[i] = heap_caps_aligned_calloc(64, 1, FB_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+        if (!s_lcd_dma_fb[i]) {
+            s_lcd_dma_fb[i] = heap_caps_aligned_calloc(64, 1, FB_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+        if (!s_lcd_dma_fb[i]) {
+            ESP_LOGE(TAG, "Failed to allocate LCD DMA framebuffer %d/%d (%d bytes)", i + 1, LCD_DMA_FB_COUNT, FB_SIZE);
+            for (int j = 0; j <= i; ++j) {
+                free(s_lcd_dma_fb[j]);
+                s_lcd_dma_fb[j] = NULL;
+            }
+            return false;
+        }
+    }
+    ESP_LOGI(TAG, "LCD DMA double buffer ready: %d x %d bytes", LCD_DMA_FB_COUNT, FB_SIZE);
+    return true;
+}
+
+/*
+ * Copy the source framebuffer into a free DMA buffer and queue it to
+ * esp_lcd. The source buffer can immediately be reused by the emulator
+ * after this function returns.
+ *
+ * We deliberately do NOT wait if both DMA buffers are occupied. Dropping
+ * one LCD refresh is preferable to stalling the emulation task.
+ */
+static bool lcd_submit_frame(const uint16_t *src, bool byte_swap)
+{
+    if (!src || !s_lcd_panel || !s_lcd_initialized || !s_lcd_dma_slots || !s_lcd_dma_fb[0] || !s_lcd_dma_fb[1]) {
+        return false;
+    }
+    /*
+     * Non-blocking acquisition.
+     *
+     * If both DMA buffers are still being transmitted, don't stall the
+     * emulator task waiting for the LCD.
+     */
+    if (xSemaphoreTake(s_lcd_dma_slots, 0) != pdTRUE) {
+        return false;
+    }
+    uint16_t *dst = s_lcd_dma_fb[s_lcd_dma_index];
+    if (!byte_swap) {
+        memcpy(dst, src, FB_SIZE);
+    } else {
+        for (int i = 0; i < FB_PIXELS; ++i) {
+            uint16_t p = src[i];
+            dst[i] = (uint16_t)((p >> 8) | (p << 8));
+        }
+    }
+    esp_err_t ret = esp_lcd_panel_draw_bitmap(s_lcd_panel, 0, 0, LCD_H_RES, LCD_V_RES, dst);
+    if (ret != ESP_OK) {
+        /*
+         * No callback will be generated for a failed submission, therefore
+         * return the slot manually.
+         */
+        xSemaphoreGive(s_lcd_dma_slots);
+        ESP_LOGE(TAG, "LCD DMA submit failed: %s", esp_err_to_name(ret));
+        return false;
+    }
+    s_lcd_dma_index ^= 1;
+    return true;
+}
+#endif
+
+/* =========================================================================
  * DISPLAY MUTEX
  * =========================================================================
  */
@@ -358,6 +454,11 @@ static esp_err_t st7789_spi_init(void)
     if (s_lcd_initialized) {
         return ESP_OK;
     }
+        s_lcd_dma_slots = xSemaphoreCreateCounting(LCD_DMA_FB_COUNT, LCD_DMA_FB_COUNT);
+    if (!s_lcd_dma_slots) {
+        ESP_LOGE(TAG, "Failed to create LCD DMA slot semaphore");
+        return ESP_ERR_NO_MEM;
+    }
     ESP_LOGI(TAG, "Initializing ST7789V SPI LCD");
     spi_bus_config_t bus_cfg = {
         .mosi_io_num     = LCD_SPI_MOSI,
@@ -401,8 +502,8 @@ static esp_err_t st7789_spi_init(void)
         .lcd_cmd_bits      = 8,
         .lcd_param_bits    = 8,
         .spi_mode          = 0,
-        .trans_queue_depth = 1,//8,
-        .on_color_trans_done = NULL,
+        .trans_queue_depth = 2,//1,//8,
+        .on_color_trans_done = st7789_color_trans_done,//NULL,
         .user_ctx           = NULL,
         .flags = {
             .dc_high_on_cmd = 0,
@@ -521,7 +622,10 @@ static esp_err_t st7789_spi_init(void)
      * MADCTL=0x60 is the known-good physical orientation and should
      * remain untouched.
      */
-
+    if (!alloc_lcd_dma_buffers()) {
+        ESP_LOGE(TAG, "LCD DMA double buffering initialization failed");
+        return ESP_ERR_NO_MEM;
+    }
     /*
      * Display ON is already sent by our known-good initialization.
      */
@@ -682,14 +786,14 @@ void display_flush(void)
      * No scaling.
      */
     int64_t t0 = esp_timer_get_time();
-    esp_err_t ret = esp_lcd_panel_draw_bitmap(
-        s_lcd_panel,
-        0,
-        0,
-        LCD_H_RES,
-        LCD_V_RES,
-        s_framebuffer
-    );
+	bool submitted = lcd_submit_frame(s_framebuffer, false);
+    if (!submitted) {
+    /*
+     * LCD is still busy with the previous two frames.
+     * Do not block the emulation task.
+     */
+        return;
+    }
     int64_t t1 = esp_timer_get_time();
     if (ret != ESP_OK) {
         ESP_LOGE(
@@ -744,7 +848,56 @@ void display_set_scale(float sx, float sy)
  * EMULATOR 320x240 FLUSH
  * =========================================================================
  */
-static void display_emu_flush_320x240(
+static void display_emu_flush_320x240(const uint16_t *buf, bool byte_swap)
+{
+    if (!buf) {
+        return;
+    }
+#ifdef CONFIG_HDMI_OUTPUT
+    if (!s_hdmi_initialized) {
+        return;
+    }
+    esp_err_t ret = ppa_scale_rgb565_to_rgb888(
+        buf,
+        EMU_W,
+        EMU_H,
+        (float)HDMI_OUT_W / EMU_W,
+        (float)HDMI_OUT_H / EMU_H,
+        s_hdmi_disp.fb,
+        s_hdmi_disp.fb_size,
+        NULL,
+        NULL,
+        byte_swap
+    );
+    if (ret != ESP_OK) {
+        ESP_LOGE( TAG, "HDMI emulator flush failed: 0x%x", ret);
+        return;
+    }
+    esp_cache_msync(s_hdmi_disp.fb, s_hdmi_disp.fb_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+#else
+    /*
+     * The physical display is exactly 320x240.
+     *
+     * lcd_submit_frame() copies the emulator framebuffer into one
+     * of the two LCD DMA buffers, performs the optional byte swap,
+     * and submits that buffer to the ST7789.
+     */
+    if (!s_lcd_initialized || !s_lcd_panel) {
+        return;
+    }
+    if (!lcd_submit_frame(buf, byte_swap)) {
+        /*
+         * Both LCD DMA buffers may still be busy.
+         *
+         * Do NOT wait here: dropping this LCD refresh is preferable
+         * to blocking the emulator task.
+         */
+        return;
+    }
+#endif
+}
+
+/*static void display_emu_flush_320x240(
     const uint16_t *buf,
     bool byte_swap)
 {
@@ -792,14 +945,9 @@ static void display_emu_flush_320x240(
     }
 
     if (!byte_swap) {
-        esp_err_t ret = esp_lcd_panel_draw_bitmap(
-            s_lcd_panel,
-            0,
-            0,
-            EMU_W,
-            EMU_H,
-            buf
-        );
+        esp_err_t ret = if (!lcd_submit_frame(buf, byte_swap)) {
+			return;
+		}
         if (ret != ESP_OK) {
             ESP_LOGE(
                 TAG,
@@ -841,7 +989,7 @@ static void display_emu_flush_320x240(
         }
     }
 #endif
-}
+}*/
 
 /* =========================================================================
  * ILI9341 COMPATIBILITY API
