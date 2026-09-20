@@ -39,14 +39,10 @@ static const char *TAG = "audio";
  * I2S CONFIGURATION
  * =========================================================================
  */
-#define AUDIO_BITS_PER_SAMPLE \
-    I2S_DATA_BIT_WIDTH_16BIT
-#define AUDIO_SLOT_MODE \
-    I2S_SLOT_MODE_STEREO
-#define AUDIO_MCLK_MULTIPLE \
-    I2S_MCLK_MULTIPLE_256
-#define AUDIO_WRITE_CHUNK \
-    4096
+#define AUDIO_BITS_PER_SAMPLE \ I2S_DATA_BIT_WIDTH_16BIT
+#define AUDIO_SLOT_MODE \ I2S_SLOT_MODE_STEREO
+#define AUDIO_MCLK_MULTIPLE \ I2S_MCLK_MULTIPLE_256
+#define AUDIO_WRITE_CHUNK \ 4096
 
 /* =========================================================================
  * DRIVER STATE
@@ -64,53 +60,36 @@ static int s_volume = 60;
  * whose stack is intentionally small.
  */
 static int16_t *s_volume_buffer = NULL;
-static const size_t s_volume_buffer_samples =
-    AUDIO_WRITE_CHUNK / sizeof(int16_t);
+static const size_t s_volume_buffer_samples = AUDIO_WRITE_CHUNK / sizeof(int16_t);
 
 /* =========================================================================
  * AMPLIFIER CONTROL
  * =========================================================================
  */
-static esp_err_t amplifier_init(
-    const audio_config_t *cfg)
+static esp_err_t amplifier_init(const audio_config_t *cfg)
 {
     if (!cfg) {
         return ESP_ERR_INVALID_ARG;
     }
-
     /*
      * -1 / GPIO_NUM_NC means that the amplifier control
      * is not connected.
      */
     if (cfg->pa_ctrl_io < 0) {
-        ESP_LOGI(
-            TAG,
-            "Amplifier GPIO disabled"
-        );
+        ESP_LOGI(TAG, "Amplifier GPIO disabled");
         return ESP_OK;
     }
-
     gpio_config_t gpio_cfg = {
-        .pin_bit_mask =
-            (1ULL << cfg->pa_ctrl_io),
-        .mode =
-            GPIO_MODE_OUTPUT,
-        .pull_up_en =
-            GPIO_PULLUP_DISABLE,
-        .pull_down_en =
-            GPIO_PULLDOWN_DISABLE,
-        .intr_type =
-            GPIO_INTR_DISABLE,
+        .pin_bit_mask = (1ULL << cfg->pa_ctrl_io),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
     };
-
-    esp_err_t ret = gpio_config(
-            &gpio_cfg
-        );
-
+    esp_err_t ret = gpio_config(&gpio_cfg);
     if (ret != ESP_OK) {ESP_LOGE(TAG, "Failed to configure amplifier GPIO%d: %s", cfg->pa_ctrl_io, esp_err_to_name(ret));
         return ret;
     }
-
     /*
      * Amplifier disabled while I2S is being initialized.
      */
@@ -146,18 +125,9 @@ static esp_err_t i2s_driver_init(const audio_config_t *cfg)
      * Our hardware only requires audio output.
      */
     i2s_chan_config_t chan_cfg =
-        I2S_CHANNEL_DEFAULT_CONFIG(
-            (i2s_port_t)cfg->i2s_num,
-            I2S_ROLE_MASTER
-        );
+        I2S_CHANNEL_DEFAULT_CONFIG((i2s_port_t)cfg->i2s_num, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
-    esp_err_t ret =
-        i2s_new_channel(
-            &chan_cfg,
-            &s_tx_handle,
-            NULL
-        );
-
+    esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
     if (ret != ESP_OK) {ESP_LOGE(TAG, "i2s_new_channel failed: %s", esp_err_to_name(ret));
         return ret;
     }
@@ -170,15 +140,8 @@ static esp_err_t i2s_driver_init(const audio_config_t *cfg)
      * does not route either signal to the audio hardware.
      */
     i2s_std_config_t std_cfg = {
-        .clk_cfg =
-            I2S_STD_CLK_DEFAULT_CONFIG(
-                cfg->sample_rate
-            ),
-        .slot_cfg =
-            I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
-                AUDIO_BITS_PER_SAMPLE,
-                AUDIO_SLOT_MODE
-            ),
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(cfg->sample_rate),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(AUDIO_BITS_PER_SAMPLE, AUDIO_SLOT_MODE),
         .gpio_cfg = {
             .mclk = (gpio_num_t)cfg->mclk_io,
             .bclk = (gpio_num_t)cfg->bclk_io,
@@ -192,7 +155,6 @@ static esp_err_t i2s_driver_init(const audio_config_t *cfg)
             },
         },
     };
-
     /*
      * 256 × sample rate internal clock multiple.
      *
@@ -200,11 +162,7 @@ static esp_err_t i2s_driver_init(const audio_config_t *cfg)
      * GPIO_NUM_NC.
      */
     std_cfg.clk_cfg.mclk_multiple = AUDIO_MCLK_MULTIPLE;
-    ret =
-        i2s_channel_init_std_mode(
-            s_tx_handle,
-            &std_cfg
-        );
+    ret = i2s_channel_init_std_mode(s_tx_handle, &std_cfg);
     if (ret != ESP_OK) {ESP_LOGE(TAG, "I2S TX initialization failed: %s", esp_err_to_name(ret));
         i2s_del_channel(s_tx_handle);
         s_tx_handle = NULL;
@@ -269,44 +227,21 @@ esp_err_t audio_init(const audio_config_t *config)
     if (ret != ESP_OK) {
         return ret;
     }
-
     /*
      * Initialize I2S TX.
      */
-    ret =
-        i2s_driver_init(
-            &s_config
-        );
-
+    ret = i2s_driver_init(&s_config);
     if (ret != ESP_OK) {
-        amplifier_enable(
-            &s_config,
-            false
-        );
+        amplifier_enable(&s_config, false);
         return ret;
     }
-
     /*
      * I2S is ready, so enable the amplifier.
      */
-    amplifier_enable(
-        &s_config,
-        true
-    );
-
-    s_initialized =
-        true;
-
-    ESP_LOGI(
-        TAG,
-        "Audio subsystem ready"
-    );
-
-    ESP_LOGI(
-        TAG,
-        "I2S TX-only / no ES8311 / no I2C"
-    );
-
+    amplifier_enable(&s_config, true);
+    s_initialized = true;
+    ESP_LOGI(TAG, "Audio subsystem ready");
+    ESP_LOGI(TAG, "I2S TX-only / no ES8311 / no I2C");
     return ESP_OK;
 }
 
@@ -314,167 +249,60 @@ esp_err_t audio_init(const audio_config_t *config)
  * TONE GENERATOR
  * =========================================================================
  */
-esp_err_t audio_play_tone(
-    uint32_t freq_hz,
-    uint32_t duration_ms,
-    int volume)
+esp_err_t audio_play_tone(uint32_t freq_hz, uint32_t duration_ms, int volume)
 {
-    if (!s_initialized ||
-        !s_tx_handle) {
+    if (!s_initialized || !s_tx_handle) {
         return ESP_ERR_INVALID_STATE;
     }
-
     if (freq_hz == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-
     if (volume < 0) {
         volume = 0;
     }
-
     if (volume > 100) {
         volume = 100;
     }
-
-    const int sample_rate =
-        s_config.sample_rate;
-
-    const int frames_per_chunk =
-        1024;
-
-    const size_t buffer_size =
-        frames_per_chunk *
-        2 *
-        sizeof(int16_t);
-
-    int16_t *buffer =
-        (int16_t *)heap_caps_malloc(
-            buffer_size,
-            MALLOC_CAP_INTERNAL |
-            MALLOC_CAP_8BIT
-        );
-
+    const int sample_rate = s_config.sample_rate;
+    const int frames_per_chunk = 1024;
+    const size_t buffer_size = frames_per_chunk * 2 * sizeof(int16_t);
+    int16_t *buffer = (int16_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!buffer) {
-        ESP_LOGE(
-            TAG,
-            "Failed to allocate tone buffer"
-        );
+        ESP_LOGE(TAG, "Failed to allocate tone buffer");
         return ESP_ERR_NO_MEM;
     }
-
-    const double phase_increment =
-        2.0 *
-        M_PI *
-        (double)freq_hz /
-        (double)sample_rate;
-
-    double phase =
-        0.0;
-
-    const int amplitude =
-        16000 *
-        volume /
-        100;
-
-    uint32_t total_frames =
-        0;
-
+    const double phase_increment = 2.0 * M_PI * (double)freq_hz / (double)sample_rate;
+    double phase = 0.0;
+    const int amplitude = 16000 * volume / 100;
+    uint32_t total_frames = 0;
     if (duration_ms > 0) {
-        total_frames =
-            (
-                (uint32_t)sample_rate *
-                duration_ms
-            ) /
-            1000;
+        total_frames = ((uint32_t)sample_rate * duration_ms) / 1000;
     }
-
-    uint32_t frames_written =
-        0;
-
-    while (
-        duration_ms == 0 ||
-        frames_written < total_frames
-    ) {
-        int frames =
-            frames_per_chunk;
-
-        if (
-            duration_ms > 0 &&
-            (
-                total_frames -
-                frames_written
-            ) < (uint32_t)frames_per_chunk
-        ) {
-            frames =
-                (int)(
-                    total_frames -
-                    frames_written
-                );
+    uint32_t frames_written = 0;
+    while (duration_ms == 0 || frames_written < total_frames) {
+        int frames = frames_per_chunk;
+        if (duration_ms > 0 && (total_frames - frames_written) < (uint32_t)frames_per_chunk) {
+            frames = (int)(total_frames - frames_written);
         }
-
-        for (int i = 0;
-             i < frames;
-             ++i) {
-            int16_t sample =
-                (int16_t)(
-                    amplitude *
-                    sin(phase)
-                );
-
-            buffer[i * 2] =
-                sample;
-
-            buffer[i * 2 + 1] =
-                sample;
-
-            phase +=
-                phase_increment;
-
-            if (
-                phase >=
-                2.0 * M_PI
-            ) {
-                phase -=
-                    2.0 * M_PI;
+        for (int i = 0; i < frames; ++i) {
+            int16_t sample = (int16_t)(amplitude * sin(phase));
+            buffer[i * 2] = sample;
+            buffer[i * 2 + 1] = sample;
+            phase += phase_increment;
+            if (phase >= 2.0 * M_PI) {
+                phase -= 2.0 * M_PI;
             }
         }
-
-        size_t bytes_written =
-            0;
-
-        esp_err_t ret =
-            i2s_channel_write(
-                s_tx_handle,
-                buffer,
-                frames *
-                2 *
-                sizeof(int16_t),
-                &bytes_written,
-                portMAX_DELAY
-            );
-
+        size_t bytes_written = 0;
+        esp_err_t ret = i2s_channel_write(s_tx_handle, buffer, frames * 2 * sizeof(int16_t), &bytes_written, portMAX_DELAY);
         if (ret != ESP_OK) {
-            ESP_LOGE(
-                TAG,
-                "I2S tone write failed: %s",
-                esp_err_to_name(ret)
-            );
-
-            heap_caps_free(
-                buffer
-            );
-
+            ESP_LOGE(TAG, "I2S tone write failed: %s", esp_err_to_name(ret));
+            heap_caps_free(buffer);
             return ret;
         }
-
-        frames_written +=
-            frames;
+        frames_written += frames;
     }
-
-    heap_caps_free(
-        buffer
-    );
-
+    heap_caps_free(buffer);
     return ESP_OK;
 }
 
@@ -484,25 +312,14 @@ esp_err_t audio_play_tone(
  */
 esp_err_t audio_stop(void)
 {
-    if (!s_initialized ||
-        !s_tx_handle) {
+    if (!s_initialized || !s_tx_handle) {
         return ESP_ERR_INVALID_STATE;
     }
-
-    esp_err_t ret =
-        i2s_channel_disable(
-            s_tx_handle
-        );
-
+    esp_err_t ret = i2s_channel_disable(s_tx_handle);
     if (ret != ESP_OK) {
         return ret;
     }
-
-    ret =
-        i2s_channel_enable(
-            s_tx_handle
-        );
-
+    ret = i2s_channel_enable(s_tx_handle);
     return ret;
 }
 
@@ -510,30 +327,19 @@ esp_err_t audio_stop(void)
  * SOFTWARE VOLUME
  * =========================================================================
  */
-esp_err_t audio_set_volume(
-    int volume)
+esp_err_t audio_set_volume(int volume)
 {
     if (!s_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
-
     if (volume < 0) {
         volume = 0;
     }
-
     if (volume > 100) {
         volume = 100;
     }
-
-    s_volume =
-        volume;
-
-    ESP_LOGI(
-        TAG,
-        "Volume set to %d%%",
-        s_volume
-    );
-
+    s_volume = volume;
+    ESP_LOGI(TAG, "Volume set to %d%%",s_volume);
     return ESP_OK;
 }
 
@@ -541,105 +347,48 @@ esp_err_t audio_set_volume(
  * SAMPLE RATE
  * =========================================================================
  */
-esp_err_t audio_set_sample_rate(
-    int sample_rate)
+esp_err_t audio_set_sample_rate(int sample_rate)
 {
-    if (!s_initialized ||
-        !s_tx_handle) {
+    if (!s_initialized || !s_tx_handle) {
         return ESP_ERR_INVALID_STATE;
     }
-
     if (sample_rate <= 0) {
         return ESP_ERR_INVALID_ARG;
     }
-
-    if (
-        sample_rate ==
-        s_config.sample_rate
-    ) {
+    if (sample_rate == s_config.sample_rate) {
         return ESP_OK;
     }
-
     /*
      * A reset to zero means the previous application changed
      * sample-rate state. In that case we need to actually
      * reconfigure the I2S clock.
      */
     if (s_config.sample_rate == 0) {
-        sample_rate =
-            sample_rate;
+        sample_rate = sample_rate;
     }
-
-    ESP_LOGI(
-        TAG,
-        "Reconfiguring I2S sample rate: %d -> %d Hz",
-        s_config.sample_rate,
-        sample_rate
-    );
-
-    esp_err_t ret =
-        i2s_channel_disable(
-            s_tx_handle
-        );
-
+    ESP_LOGI(TAG, "Reconfiguring I2S sample rate: %d -> %d Hz", s_config.sample_rate, sample_rate);
+    esp_err_t ret = i2s_channel_disable(s_tx_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to disable I2S TX: %s",
-            esp_err_to_name(ret)
-        );
+        ESP_LOGE(TAG, "Failed to disable I2S TX: %s", esp_err_to_name(ret));
         return ret;
     }
-
-    i2s_std_clk_config_t clk_cfg =
-        I2S_STD_CLK_DEFAULT_CONFIG(
-            sample_rate
-        );
-
-    clk_cfg.mclk_multiple =
-        AUDIO_MCLK_MULTIPLE;
-
-    ret =
-        i2s_channel_reconfig_std_clock(
-            s_tx_handle,
-            &clk_cfg
-        );
-
+    i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
+    clk_cfg.mclk_multiple = AUDIO_MCLK_MULTIPLE;
+    ret = i2s_channel_reconfig_std_clock(s_tx_handle, &clk_cfg);
     if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "Failed to reconfigure I2S clock: %s",
-            esp_err_to_name(ret)
-        );
-
+        ESP_LOGE(TAG, "Failed to reconfigure I2S clock: %s", esp_err_to_name(ret));
         /*
          * Try to restore the TX channel.
          */
-        i2s_channel_enable(
-            s_tx_handle
-        );
-
+        i2s_channel_enable(s_tx_handle);
         return ret;
     }
-
-    ret =
-        i2s_channel_enable(
-            s_tx_handle
-        );
-
+    ret = i2s_channel_enable(s_tx_handle);
     if (ret != ESP_OK) {
         return ret;
     }
-
-    s_config.sample_rate =
-        sample_rate;
-
-    ESP_LOGI(
-        TAG,
-        "I2S sample rate set to %d Hz",
-        sample_rate
-    );
-
+    s_config.sample_rate = sample_rate;
+    ESP_LOGI(TAG, "I2S sample rate set to %d Hz", sample_rate);
     return ESP_OK;
 }
 
@@ -655,99 +404,52 @@ void audio_reset_sample_rate(void)
      * The next audio_set_sample_rate() call will reconfigure
      * the I2S clock.
      */
-    s_config.sample_rate =
-        0;
+    s_config.sample_rate = 0;
 }
 
 /* =========================================================================
  * PCM OUTPUT
  * =========================================================================
  */
-esp_err_t audio_play_pcm(
-    const void *data,
-    size_t len,
-    int sample_rate)
+esp_err_t audio_play_pcm(const void *data, size_t len, int sample_rate)
 {
-    if (!s_initialized ||
-        !s_tx_handle) {
+    if (!s_initialized || !s_tx_handle) {
         return ESP_ERR_INVALID_STATE;
     }
-
-    if (!data ||
-        len == 0) {
+    if (!data || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-
     /*
      * The emulator supplies the sample rate with every PCM block.
      */
-    if (
-        sample_rate > 0 &&
-        sample_rate !=
-        s_config.sample_rate
-    ) {
-        esp_err_t ret =
-            audio_set_sample_rate(
-                sample_rate
-            );
-
+    if (sample_rate > 0 && sample_rate != s_config.sample_rate) {
+        esp_err_t ret = audio_set_sample_rate(sample_rate);
         if (ret != ESP_OK) {
             return ret;
         }
     }
-
     /*
      * At 100% volume we can send the original PCM buffer directly.
      */
     if (s_volume >= 100) {
-        const uint8_t *ptr =
-            (const uint8_t *)data;
-
-        size_t remaining =
-            len;
-
+        const uint8_t *ptr = (const uint8_t *)data;
+        size_t remaining = len;
         while (remaining > 0) {
-            size_t to_write =
-                remaining >
-                AUDIO_WRITE_CHUNK
-                ? AUDIO_WRITE_CHUNK
-                : remaining;
-
-            size_t bytes_written =
-                0;
-
-            esp_err_t ret =
-                i2s_channel_write(
-                    s_tx_handle,
-                    ptr,
-                    to_write,
-                    &bytes_written,
-                    portMAX_DELAY
-                );
-
+            size_t to_write = remaining > AUDIO_WRITE_CHUNK ? AUDIO_WRITE_CHUNK : remaining;
+            size_t bytes_written = 0;
+            esp_err_t ret = i2s_channel_write(s_tx_handle, ptr, to_write, &bytes_written, portMAX_DELAY);
             if (ret != ESP_OK) {
-                ESP_LOGE(
-                    TAG,
-                    "PCM write failed: %s",
-                    esp_err_to_name(ret)
-                );
-
+                ESP_LOGE(TAG, "PCM write failed: %s", esp_err_to_name(ret));
                 return ret;
             }
-
             if (bytes_written == 0) {
                 return ESP_FAIL;
             }
-
-            ptr +=
-                bytes_written;
-            remaining -=
-                bytes_written;
+            ptr += bytes_written;
+            remaining -= bytes_written;
         }
-
         return ESP_OK;
     }
-
     /*
      * Software volume processing.
      *
@@ -786,14 +488,7 @@ esp_err_t audio_play_pcm(
             s_volume_buffer[i] = (int16_t)sample;
         }
         size_t bytes_written = 0;
-        esp_err_t ret = i2s_channel_write(
-                s_tx_handle,
-                s_volume_buffer,
-                count *
-                sizeof(int16_t),
-                &bytes_written,
-                portMAX_DELAY
-            );
+        esp_err_t ret = i2s_channel_write(s_tx_handle, s_volume_buffer, count * sizeof(int16_t), &bytes_written, portMAX_DELAY);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "PCM volume write failed: %s", esp_err_to_name(ret));
             return ret;
