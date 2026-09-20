@@ -39,10 +39,10 @@ static const char *TAG = "audio";
  * I2S CONFIGURATION
  * =========================================================================
  */
-#define AUDIO_BITS_PER_SAMPLE \ I2S_DATA_BIT_WIDTH_16BIT
-#define AUDIO_SLOT_MODE \ I2S_SLOT_MODE_STEREO
-#define AUDIO_MCLK_MULTIPLE \ I2S_MCLK_MULTIPLE_256
-#define AUDIO_WRITE_CHUNK \ 4096
+#define AUDIO_BITS_PER_SAMPLE I2S_DATA_BIT_WIDTH_16BIT
+#define AUDIO_SLOT_MODE I2S_SLOT_MODE_STEREO
+#define AUDIO_MCLK_MULTIPLE I2S_MCLK_MULTIPLE_256
+#define AUDIO_WRITE_CHUNK 4096
 
 /* =========================================================================
  * DRIVER STATE
