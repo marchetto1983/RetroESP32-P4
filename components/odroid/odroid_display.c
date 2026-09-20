@@ -795,14 +795,6 @@ void display_flush(void)
         return;
     }
     int64_t t1 = esp_timer_get_time();
-    if (ret != ESP_OK) {
-        ESP_LOGE(
-            TAG,
-            "ST7789 frame transfer failed: %s",
-            esp_err_to_name(ret)
-        );
-        return;
-    }
     s_timing_lcd_acc += t1 - t0;
     s_timing_count++;
 #endif
