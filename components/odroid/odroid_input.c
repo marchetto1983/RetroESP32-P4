@@ -445,7 +445,7 @@ void odroid_input_battery_level_init(void)
         adc_oneshot_unit_init_cfg_t unit_cfg = {
             .unit_id = ADC_UNIT_2,
         };
-        esp_err_t err = adc_oneshot_new_unit(unit_cfg, &s_battery_adc_handle);
+        esp_err_t err = adc_oneshot_new_unit(&unit_cfg, &s_battery_adc_handle);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "Battery ADC: unit init failed (%s)", esp_err_to_name(err));
             return;

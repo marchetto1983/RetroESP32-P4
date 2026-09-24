@@ -110,6 +110,10 @@ static uint16_t *s_lcd_dma_fb[LCD_DMA_FB_COUNT] = { NULL, NULL };
 static uint8_t s_lcd_dma_index = 0;
 static SemaphoreHandle_t s_lcd_dma_slots = NULL;
 
+static esp_lcd_panel_io_handle_t s_lcd_io = NULL;
+static esp_lcd_panel_handle_t s_lcd_panel = NULL;
+static bool s_lcd_initialized = false;
+
 static bool st7789_color_trans_done(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
     (void)panel_io;
@@ -243,11 +247,7 @@ void odroid_display_unlock_sms_display(void)
  * ST7789V
  * =========================================================================
  */
-#ifndef CONFIG_HDMI_OUTPUT
-static esp_lcd_panel_io_handle_t s_lcd_io = NULL;
-static esp_lcd_panel_handle_t s_lcd_panel = NULL;
-static bool s_lcd_initialized = false;
-#endif
+
 /*
  * Your tested initialization:
  *
