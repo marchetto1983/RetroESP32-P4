@@ -433,6 +433,20 @@ static int lcd_fb_write = 0;
 static QueueHandle_t neo_vidQueue = NULL;
 static TaskHandle_t neo_videoTaskHandle = NULL;
 static volatile bool neo_videoTaskRunning = false;
+/* ── Video pipeline instrumentation ── */
+static uint32_t video_stat_frames_produced = 0;
+static uint32_t video_stat_frames_consumed = 0;
+static uint32_t video_stat_frame_seq = 0;
+
+static int64_t video_stat_last_produce_us = 0;
+static int64_t video_stat_max_produce_gap_us = 0;
+
+static int64_t video_stat_max_copy_us = 0;
+static int64_t video_stat_max_wait_us = 0;
+static int64_t video_stat_max_push_us = 0;
+static int64_t video_stat_max_total_us = 0;
+
+static int64_t video_stat_last_report_us = 0;
 
 /* Forward declaration — points to current write buffer */
 static uint16_t *lcd_fb;
@@ -738,16 +752,46 @@ static uint16_t *sprbuf_pixels;
 /* lcd_fb forward-declared above (used by menu/volume overlays) */
 
 /* ── Neo Geo video task (Core 1) — async PPA + LCD push ── */
-static void neo_video_task(void *arg) {
+static void neo_video_task(void *arg)
+{
     (void)arg;
+
     uint16_t *frame = NULL;
+
     neo_videoTaskRunning = true;
 
     while (1) {
-        xQueuePeek(neo_vidQueue, &frame, portMAX_DELAY);
-        if (frame == (uint16_t *)1) break;  /* quit sentinel */
+        int64_t wait_start_us = esp_timer_get_time();
 
-        ili9341_write_frame_rgb565_custom(frame, NEO_FB_W, NEO_FB_H, 2.0f, false);
+        xQueuePeek(neo_vidQueue, &frame, portMAX_DELAY);
+		int64_t dequeue_latency_us = 0;
+
+        int64_t consume_start_us = esp_timer_get_time();
+
+        if (frame == (uint16_t *)1)
+            break;
+
+        int64_t wait_us = consume_start_us - wait_start_us;
+
+        if (wait_us > video_stat_max_wait_us)
+            video_stat_max_wait_us = wait_us;
+
+        video_stat_frames_consumed++;
+
+        int64_t push_start_us = esp_timer_get_time();
+
+        ili9341_write_frame_rgb565_custom(
+            frame,
+            NEO_FB_W,
+            NEO_FB_H,
+            2.0f,
+            false
+        );
+
+        int64_t push_us = esp_timer_get_time() - push_start_us;
+
+        if (push_us > video_stat_max_push_us)
+            video_stat_max_push_us = push_us;
 
         /* Blit sidebar button labels after frame push */
         if (sidebar_countdown > 0) {
@@ -756,11 +800,47 @@ static void neo_video_task(void *arg) {
         }
 
         xQueueReceive(neo_vidQueue, &frame, portMAX_DELAY);
+
+        int64_t total_us = esp_timer_get_time() - consume_start_us;
+
+        if (total_us > video_stat_max_total_us)
+            video_stat_max_total_us = total_us;
+
+        /*
+         * Periodic diagnostic report.
+         * Keep logging at low frequency so instrumentation itself
+         * does not perturb the frame pipeline.
+         */
+        int64_t now_us = esp_timer_get_time();
+
+        if ((now_us - video_stat_last_report_us) >= 5000000) {
+            video_stat_last_report_us = now_us;
+
+            ESP_LOGI(
+                TAG,
+                "VIDEO STAT: produced=%lu consumed=%lu "
+                "last_wait=%lldus max_wait=%lldus "
+                "last_push=%lldus max_push=%lldus "
+                "max_total=%lldus "
+                "max_produce_gap=%lldus "
+                "frame=%p",
+                (unsigned long)video_stat_frames_produced,
+                (unsigned long)video_stat_frames_consumed,
+                (long long)wait_us,
+                (long long)video_stat_max_wait_us,
+                (long long)push_us,
+                (long long)video_stat_max_push_us,
+                (long long)video_stat_max_total_us,
+                (long long)video_stat_max_produce_gap_us,
+                (void *)frame
+            );
+        }
     }
 
     neo_videoTaskRunning = false;
     vTaskDelete(NULL);
 }
+
 
 int screen_init(void) {
     ESP_LOGI(TAG, "screen_init: %dx%d RGB565", NEO_SCREEN_W + 32, NEO_SCREEN_H + 32);
@@ -887,21 +967,51 @@ void screen_update(void) {
 
     /* Extract visible area (304x224) from buffer (352 pixels wide, offset 16,16) */
     const int src_stride = NEO_SCREEN_W + 32; /* 352 */
-    const int vis_w = visible_area.w;          /* 304 */
-    const int vis_h = visible_area.h;          /* 224 */
-    const int ox = visible_area.x;             /* 16  */
-    const int oy = visible_area.y;             /* 16  */
+	const int vis_w = visible_area.w;          /* 304 */
+	const int vis_h = visible_area.h;          /* 224 */
+	const int ox = visible_area.x;
+	const int oy = visible_area.y;
+	int64_t copy_start_us = esp_timer_get_time();
+	for (int y = 0; y < vis_h; y++) {
+		memcpy(&lcd_fb[y * vis_w],
+			   &buffer_pixels[(oy + y) * src_stride + ox],
+			   vis_w * sizeof(uint16_t));
+	}
+	
+	int64_t copy_us = esp_timer_get_time() - copy_start_us;
 
-    for (int y = 0; y < vis_h; y++) {
-        memcpy(&lcd_fb[y * vis_w],
-               &buffer_pixels[(oy + y) * src_stride + ox],
-               vis_w * sizeof(uint16_t));
-    }
+	if (copy_us > video_stat_max_copy_us)
+		video_stat_max_copy_us = copy_us;
 
     /* Post frame to video task on Core 1 (non-blocking overwrite) */
     if (neo_vidQueue) {
-        void *arg = (void *)lcd_fb;
-        xQueueOverwrite(neo_vidQueue, &arg);
+        int64_t now_us = esp_timer_get_time();
+
+	if (video_stat_last_produce_us != 0) {
+		int64_t gap_us = now_us - video_stat_last_produce_us;
+
+		if (gap_us > video_stat_max_produce_gap_us)
+			video_stat_max_produce_gap_us = gap_us;
+	}
+
+	video_stat_last_produce_us = now_us;
+
+	uint32_t seq = ++video_stat_frame_seq;
+	video_stat_frames_produced++;
+
+	void *arg = (void *)lcd_fb;
+
+	xQueueOverwrite(neo_vidQueue, &arg);
+
+
+	ESP_LOGD(
+		TAG,
+		"VIDEO PRODUCE #%lu FB=%p copy=%lldus",
+		(unsigned long)seq,
+		(void *)lcd_fb,
+		(long long)copy_us
+	);
+
 
         /* Flip to other buffer for next frame */
         lcd_fb_write ^= 1;
